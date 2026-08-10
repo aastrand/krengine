@@ -6,22 +6,12 @@
 // budget buys a thousand cells per axis in 2D, which is what makes the
 // structure visible at all.
 //
-// Per frame: advect velocity through itself, inject where the beads project
-// onto the screen, restore curl with vorticity confinement, make the field
-// divergence-free with a Jacobi pressure solve, then advect dye through it.
+// Per frame: advect velocity through itself, then the splat pass injects the
+// beads, then vorticity confinement restores curl, a Jacobi pressure solve
+// makes the field divergence-free, and finally dye is advected through it.
 
-const GRID: vec2<f32> = vec2<f32>(1024.0, 576.0);
-
-/// How strongly a bead's own motion is imposed on the fluid touching it.
-/// This is a constraint, not a force: near the bead the fluid simply moves
-/// with it, the way liquid does against a dragged solid. Injecting velocity
-/// instead makes a jet, which billows rather than shedding a wake.
-const COUPLING: f32 = 82.0;
-/// How much dye a bead sheds.
-const EMISSION: f32 = 1.15;
-/// Bead influence radius, in UV units.
-const EMITTER_RADIUS: f32 = 0.018;
-const EMITTER_CUTOFF: f32 = 0.005;
+// Per layer. Lower than a single sheet would use, since several run.
+const GRID: vec2<f32> = vec2<f32>(768.0, 432.0);
 
 const VELOCITY_DAMPING: f32 = 0.16;
 const DYE_DISSIPATION: f32 = 0.28;
@@ -36,7 +26,6 @@ const VORTICITY: f32 = 24.0;
 @group(1) @binding(2) var tex1: texture_2d<f32>;
 @group(1) @binding(3) var out_vec: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(4) var out_scalar: texture_storage_2d<rgba16float, write>;
-@group(1) @binding(5) var<storage, read> emitters: array<vec4<f32>>;
 
 fn cell_to_uv(cell: vec2<u32>) -> vec2<f32> {
     return (vec2<f32>(cell) + 0.5) / GRID;
@@ -63,22 +52,7 @@ fn cs_advect_velocity(@builtin(global_invocation_id) id: vec3<u32>) {
 
     result *= exp(-VELOCITY_DAMPING * dt);
 
-    let count = arrayLength(&emitters);
-    for (var i = 0u; i < count; i = i + 1u) {
-        let emitter = emitters[i];
-        let offset = (uv - emitter.xy) * aspect_scale();
-        let squared = dot(offset, offset);
-        if squared < EMITTER_CUTOFF {
-            // zw is the bead's screen-space velocity. Blend the fluid toward
-            // it: inside the bead the fluid matches it exactly, and the
-            // pressure solve turns that into flow around the obstacle and a
-            // vortex street behind it.
-            let falloff = exp(-squared / (EMITTER_RADIUS * EMITTER_RADIUS));
-            let grip = clamp(falloff * COUPLING * dt, 0.0, 1.0);
-            result = mix(result, emitter.zw, grip);
-        }
-    }
-
+    // The beads are injected by the splat pass, not here.
     textureStore(out_vec, id.xy, vec4<f32>(result, 0.0, 0.0));
 }
 
@@ -167,16 +141,6 @@ fn cs_advect_dye(@builtin(global_invocation_id) id: vec3<u32>) {
     var dye = textureSampleLevel(tex0, lin, uv - velocity * dt, 0.0).x;
 
     dye *= exp(-DYE_DISSIPATION * dt);
-
-    let count = arrayLength(&emitters);
-    for (var i = 0u; i < count; i = i + 1u) {
-        let emitter = emitters[i];
-        let offset = (uv - emitter.xy) * aspect_scale();
-        let squared = dot(offset, offset);
-        if squared < EMITTER_CUTOFF {
-            dye += exp(-squared / (EMITTER_RADIUS * EMITTER_RADIUS)) * EMISSION * dt;
-        }
-    }
 
     textureStore(out_scalar, id.xy, vec4<f32>(min(dye, 1.5), 0.0, 0.0, 0.0));
 }

@@ -155,7 +155,7 @@ impl Renderer {
         );
 
         let targets = Targets::new(device, gpu.config.width, gpu.config.height);
-        let fluid = FluidPass::new(device, &uniform_layout);
+        let fluid = FluidPass::new(device, &uniform_layout, &targets.depth);
         let bloom_targets =
             bloom.targets(device, &targets.hdr, gpu.config.width, gpu.config.height);
         let hdr_bind_group = post.make_bind_group(device, &targets.hdr);
@@ -177,6 +177,7 @@ impl Renderer {
 
     pub fn resize(&mut self, gpu: &Gpu) {
         self.targets = Targets::new(&gpu.device, gpu.config.width, gpu.config.height);
+        self.fluid.resize(&gpu.device, &self.targets.depth);
         self.bloom_targets = self.bloom.targets(
             &gpu.device,
             &self.targets.hdr,
@@ -255,7 +256,8 @@ impl Renderer {
                 label: Some("frame encoder"),
             });
 
-        self.fluid.simulate(&mut encoder, &self.uniform_bind_group);
+        self.fluid
+            .simulate(&mut encoder, &self.uniform_bind_group, PARTICLE_COUNT);
 
         self.scene.draw(
             &mut encoder,
