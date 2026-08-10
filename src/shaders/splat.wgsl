@@ -55,10 +55,17 @@ fn project(p: vec3<f32>) -> vec2<f32> {
     return vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
 }
 
+/// What stirs the fluid: the beads to begin with, the spike tips once the
+/// ferrofluid has taken over. Crossfaded, so the handover is not a jump.
+fn stirrer(i: u32, t: f32) -> vec3<f32> {
+    let takeover = smoothstep(0.15, 0.85, u.scene.x);
+    return mix(particle_pos(i, t), spike_tip(i, t), takeover);
+}
+
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) bead: u32) -> VsOut {
-    let world = particle_pos(bead, u.time);
-    let previous = particle_pos(bead, u.time - VELOCITY_DT);
+    let world = stirrer(bead, u.time);
+    let previous = stirrer(bead, u.time - VELOCITY_DT);
 
     let here = project(world);
     let before = project(previous);
@@ -86,7 +93,11 @@ fn fs_velocity(in: VsOut) -> @location(0) vec4<f32> {
         discard;
     }
     let falloff = exp(-squared);
-    let grip = clamp(falloff * in.weight * COUPLING * u.frame.x, 0.0, 1.0);
+    let grip = clamp(
+        falloff * in.weight * COUPLING * (1.0 + u.scene.z * 1.5) * u.frame.x,
+        0.0,
+        1.0,
+    );
     return vec4<f32>(in.velocity, 0.0, grip);
 }
 
@@ -96,6 +107,9 @@ fn fs_dye(in: VsOut) -> @location(0) vec4<f32> {
     if squared > 1.0 {
         discard;
     }
-    let amount = exp(-squared) * in.weight * EMISSION * u.frame.x;
+    // u.scene.z floods the field during a transition, so the dissolve has a
+    // dense front to wipe with rather than the beads' thin trails.
+    let flood = 1.0 + u.scene.z * 14.0;
+    let amount = exp(-squared) * in.weight * EMISSION * flood * u.frame.x;
     return vec4<f32>(amount, 0.0, 0.0, 0.0);
 }

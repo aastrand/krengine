@@ -21,7 +21,10 @@ impl TextPass {
         uniform_layout: &wgpu::BindGroupLayout,
         cards: &[&str],
     ) -> anyhow::Result<Self> {
-        let atlas = FontAtlas::new(include_bytes!("../../assets/DejaVuSans-Bold.ttf"), CHARACTERS)?;
+        let atlas = FontAtlas::new(
+            include_bytes!("../../assets/DejaVuSans-Bold.ttf"),
+            CHARACTERS,
+        )?;
 
         let texture = device.create_texture_with_data(
             queue,

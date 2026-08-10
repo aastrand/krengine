@@ -13,7 +13,7 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use xmrs::prelude::Module;
 use xmrsplayer::audio_observer::{MixContext, MixObserver};
@@ -344,6 +344,8 @@ pub struct Music {
     last_time: f32,
     /// Filtered difference between the audio position and wall time.
     offset: f32,
+    /// Seconds the tune was started into.
+    skip: f32,
     locked: bool,
     spectrum: Spectrum,
     onset: OnsetDetector,
@@ -353,7 +355,10 @@ pub struct Music {
 }
 
 impl Music {
-    pub fn start(path: &std::path::Path) -> anyhow::Result<Self> {
+    /// `skip` starts the tune that many seconds in. The clock is offset to
+    /// match, so the timeline lands in the same place — handy for working on a
+    /// section without watching the intro every time.
+    pub fn start(path: &std::path::Path, skip: f32) -> anyhow::Result<Self> {
         let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
         // The player borrows the module for its whole life, and that life is
         // the process's — leaking is simpler than a self-referential struct.
@@ -385,6 +390,13 @@ impl Music {
             state: state.clone(),
         }));
 
+        if skip > 0.0 {
+            // XM runs at bpm * 2/5 ticks a second.
+            let tick = (skip * module.default_bpm as f32 * 0.4) as u32;
+            player.goto_tick(tick);
+            log::info!("starting {skip:.1}s in");
+        }
+
         let epoch = std::time::Instant::now();
         let player = Arc::new(Mutex::new(player));
         let stream = Self::build_stream(&device, &config, player, state.clone(), channels)?;
@@ -407,6 +419,7 @@ impl Music {
             epoch,
             last_time: 0.0,
             offset: 0.0,
+            skip,
             locked: false,
             spectrum: Spectrum::new(sample_rate as f32),
             onset: OnsetDetector::default(),
@@ -483,7 +496,7 @@ impl Music {
         }
 
         let latency = f32::from_bits(self.state.latency.load(Ordering::Relaxed));
-        let time = wall + self.offset - latency + LATENCY_OFFSET_MS / 1000.0;
+        let time = wall + self.offset - latency + LATENCY_OFFSET_MS / 1000.0 + self.skip;
         self.last_time = time.max(self.last_time);
         self.last_time
     }

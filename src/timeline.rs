@@ -19,8 +19,12 @@ const CARD_FADE: f32 = 0.35;
 /// When the scene begins to appear, and how long it takes.
 const SCENE_START: f32 = 7.7;
 const SCENE_FADE: f32 = 2.4;
-/// When the ferrofluid takes over, in beats from the start.
-const SPIKE_BEATS: f32 = 64.0;
+/// When the ferrofluid takes over, in beats from the start. The intro ends
+/// around beat 16, so this leaves a short first scene rather than a long one.
+const SPIKE_BEATS: f32 = 32.0;
+/// How long the change takes. Short: a transition that eases over sixteen
+/// beats reads as a fade, not as an event.
+const SPIKE_RAMP: f32 = 6.0;
 
 /// How far a card travels while it is on screen, in cap heights.
 const SCROLL_RANGE: f32 = 1.5;
@@ -44,6 +48,8 @@ pub struct Stage {
     pub spike: f32,
     /// Transition mask threshold: 0 is fully the old scene, 1 the new one.
     pub dissolve: f32,
+    /// Extra dye shed during a transition, to give the wipe a front.
+    pub burst: f32,
 }
 
 impl Stage {
@@ -79,14 +85,27 @@ impl Stage {
         // Scene changes, in beats from the start of the tune. The blob spends
         // the opening as a fluid, then bristles.
         let beats = music.beat_phase;
-        let spike = smoothstep(SPIKE_BEATS, SPIKE_BEATS + 16.0, beats);
-        let dissolve = smoothstep(SPIKE_BEATS - 4.0, SPIKE_BEATS + 12.0, beats);
+        let spike = smoothstep(SPIKE_BEATS, SPIKE_BEATS + SPIKE_RAMP, beats);
+
+        // The wipe leads the change slightly, so the new scene is revealed
+        // rather than appearing and then being wiped to.
+        let dissolve = smoothstep(SPIKE_BEATS - 2.0, SPIKE_BEATS + SPIKE_RAMP * 0.7, beats);
+
+        // A burst of dye just before the wipe, so the mask has a front to
+        // sweep instead of only the thin wakes the beads leave.
+        let since = beats - (SPIKE_BEATS - 3.0);
+        let burst = if since > 0.0 {
+            (1.0 - since / 5.0).clamp(0.0, 1.0).powf(0.6)
+        } else {
+            0.0
+        };
 
         Self {
             card,
             card_alpha,
             spike,
             dissolve,
+            burst,
             scene: smoothstep(SCENE_START, SCENE_START + SCENE_FADE, t),
             scroll,
             scale,
@@ -307,7 +326,6 @@ impl Director {
 
 impl Camera {
     fn compose(shot: &Shot, t: f32, music: &Sync) -> Self {
-
         let mut fov = 52.0;
         let mut target = Vec3::ZERO;
 
@@ -323,7 +341,11 @@ impl Camera {
                 to_fov,
                 snap,
             } => {
-                let e = if snap > 0.0 { ease_out(t, snap) } else { ease(t) };
+                let e = if snap > 0.0 {
+                    ease_out(t, snap)
+                } else {
+                    ease(t)
+                };
                 fov = from_fov + (to_fov - from_fov) * e;
                 let radius = from + (to - from) * e;
                 let height = from_height + (to_height - from_height) * e;
@@ -342,7 +364,10 @@ impl Camera {
                 target = Vec3::new(0.0, height * 0.35, 0.0);
                 orbit_position(azimuth + t * sweep, radius, height)
             }
-            Kind::Spline { points, fov: shot_fov } => {
+            Kind::Spline {
+                points,
+                fov: shot_fov,
+            } => {
                 fov = shot_fov;
                 // Linear in t: the spline's own shape supplies the variation,
                 // and easing it as well would make it lurch between points.

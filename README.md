@@ -5,6 +5,9 @@ textured room, stirred by a fluid simulation, cut to the music.
 
 ```
 cargo run --release -- path/to/module.xm
+
+# start thirty seconds in, tune and timeline together, to skip the intro
+cargo run --release -- path/to/module.xm 30
 ```
 
 The tune is a command-line argument, not an asset — it runs silent without one,

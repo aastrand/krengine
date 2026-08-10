@@ -36,6 +36,8 @@ struct State {
 struct App {
     state: Option<State>,
     music: Option<Music>,
+    /// Seconds the run started into the tune.
+    skip: f32,
 }
 
 impl ApplicationHandler for App {
@@ -72,15 +74,13 @@ impl ApplicationHandler for App {
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::KeyboardInput { event, .. } => {
-                if event.state.is_pressed() {
-                    match event.physical_key {
-                        PhysicalKey::Code(KeyCode::Escape) => event_loop.exit(),
-                        PhysicalKey::Code(KeyCode::KeyB) => {
-                            state.renderer.show_bands = !state.renderer.show_bands;
-                        }
-                        _ => {}
+            WindowEvent::KeyboardInput { event, .. } if event.state.is_pressed() => {
+                match event.physical_key {
+                    PhysicalKey::Code(KeyCode::Escape) => event_loop.exit(),
+                    PhysicalKey::Code(KeyCode::KeyB) => {
+                        state.renderer.show_bands = !state.renderer.show_bands;
                     }
+                    _ => {}
                 }
             }
             WindowEvent::Resized(size) => {
@@ -97,7 +97,7 @@ impl ApplicationHandler for App {
                 let music = match self.music.as_mut() {
                     Some(music) => music.sample(dt),
                     None => Sync {
-                        time: (now - state.start).as_secs_f32(),
+                        time: (now - state.start).as_secs_f32() + self.skip,
                         dt,
                         ..Default::default()
                     },
@@ -117,7 +117,10 @@ impl ApplicationHandler for App {
                     let at = |q: f32| sorted[(sorted.len() as f32 * q) as usize % sorted.len()];
                     log::info!(
                         "frame ms: p50 {:.1}  p95 {:.1}  max {:.1}  ({:.0} fps, audio latency {:.0} ms)",
-                        at(0.5), at(0.95), at(0.999), 1000.0 / at(0.5),
+                        at(0.5),
+                        at(0.95),
+                        at(0.999),
+                        1000.0 / at(0.5),
                         music.output_latency * 1000.0
                     );
                 }
@@ -134,10 +137,16 @@ impl ApplicationHandler for App {
 fn main() -> anyhow::Result<()> {
     env_logger::init();
 
-    // krengine [path/to/module.xm] — runs silent if no tune is given.
-    let track = std::env::args().nth(1).map(PathBuf::from);
+    // krengine [module.xm] [seconds-to-skip]
+    //
+    // The skip starts both the tune and the timeline that far in, so a section
+    // can be worked on without sitting through the intro each run.
+    let mut args = std::env::args().skip(1);
+    let track = args.next().map(PathBuf::from);
+    let skip: f32 = args.next().and_then(|a| a.parse().ok()).unwrap_or(0.0);
+
     let music = match track {
-        Some(path) => match Music::start(&path) {
+        Some(path) => match Music::start(&path, skip) {
             Ok(music) => Some(music),
             Err(e) => {
                 log::error!("no music: {e:#}");
@@ -151,6 +160,7 @@ fn main() -> anyhow::Result<()> {
     event_loop.set_control_flow(ControlFlow::Poll);
     event_loop.run_app(&mut App {
         music,
+        skip,
         ..Default::default()
     })?;
     Ok(())

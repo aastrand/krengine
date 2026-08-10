@@ -10,7 +10,7 @@
 
 /// Width of the dissolve's edge, in dye units. Narrow enough that the fluid's
 /// filaments show in the boundary.
-const DISSOLVE_EDGE: f32 = 0.10;
+const DISSOLVE_EDGE: f32 = 0.055;
 
 /// How much of the blurred highlights to mix back in.
 const BLOOM_STRENGTH: f32 = 0.55;
@@ -115,17 +115,14 @@ fn fs_main(in: FullscreenOut) -> @location(0) vec4<f32> {
 
     // What the scene grades to on the far side: warmer and harder, to sit with
     // the ferrofluid.
-    let after = mix(
-        vec3<f32>(dot(color, vec3<f32>(0.299, 0.587, 0.114))),
-        color * vec3<f32>(1.18, 0.98, 0.88),
-        1.25,
-    );
+    let luma = dot(color, vec3<f32>(0.299, 0.587, 0.114));
+    let after = mix(vec3<f32>(luma), color * vec3<f32>(1.06, 1.0, 0.95), 1.08);
     color = mix(color, after, crossed);
 
     // The dissolve's leading edge glows, so the wipe reads as something
     // burning through rather than a fade.
     let edge = crossed * (1.0 - crossed) * 4.0;
-    color += VEIN_COLOR * edge * 0.5;
+    color += VEIN_COLOR * edge * 1.6;
 
     color = tonemap(color * 1.15);
 

@@ -168,11 +168,12 @@ impl FluidPass {
             bind_group_layouts: &[Some(uniform_layout), Some(&sim_layout)],
             immediate_size: 0,
         });
-        let splat_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("fluid splat pipeline layout"),
-            bind_group_layouts: &[Some(uniform_layout), Some(&splat_layout)],
-            immediate_size: 0,
-        });
+        let splat_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("fluid splat pipeline layout"),
+                bind_group_layouts: &[Some(uniform_layout), Some(&splat_layout)],
+                immediate_size: 0,
+            });
 
         let compute = |label: &str, entry: &str, module: &wgpu::ShaderModule, layout| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -426,7 +427,12 @@ impl FluidPass {
                 &sim,
                 &sim_pipeline_layout,
             ),
-            vorticity: compute("fluid vorticity", "cs_vorticity", &sim, &sim_pipeline_layout),
+            vorticity: compute(
+                "fluid vorticity",
+                "cs_vorticity",
+                &sim,
+                &sim_pipeline_layout,
+            ),
             divergence: compute(
                 "fluid divergence",
                 "cs_divergence",

@@ -1,7 +1,7 @@
 pub mod bloom;
+pub mod fluid;
 pub mod particles;
 pub mod post;
-pub mod fluid;
 pub mod scene;
 pub mod text;
 

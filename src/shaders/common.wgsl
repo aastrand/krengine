@@ -168,6 +168,46 @@ fn blob_gravity(p: vec3<f32>, t: f32) -> vec3<f32> {
     return offset;
 }
 
+/// Ferrofluid spikes.
+///
+/// A field of lobes over the direction from a blob's centre, so the surface
+/// bristles outward along its own normals the way a magnetised fluid does.
+/// Driven by the bass, so the spikes stand up on the beat.
+fn spikes(direction: vec3<f32>) -> f32 {
+    let t = u.time * 0.4;
+    // Three offset lobe fields, so the spacing does not read as a grid.
+    let a = sin(direction.x * 7.0 + t) * sin(direction.y * 7.0 - t) * sin(direction.z * 7.0);
+    let b = sin(direction.x * 4.3 - t) * sin(direction.y * 4.3) * sin(direction.z * 4.3 + t);
+    let lobes = abs(a) * 0.65 + abs(b) * 0.35;
+
+    // A high power turns rounded bumps into points.
+    return pow(lobes, 4.0);
+}
+
+/// How far the spikes reach at full strength.
+const SPIKE_LENGTH: f32 = 0.62;
+/// Nominal blob radius, for placing things on the surface.
+const BLOB_RADIUS: f32 = 0.34;
+
+/// Evenly spread directions over a sphere, by golden angle.
+fn sphere_direction(i: u32, count: u32) -> vec3<f32> {
+    let fi = f32(i) + 0.5;
+    let y = 1.0 - 2.0 * fi / f32(count);
+    let radius = sqrt(max(1.0 - y * y, 0.0));
+    let theta = fi * 2.399963;
+    return vec3<f32>(cos(theta) * radius, y, sin(theta) * radius);
+}
+
+/// The tip of spike `i`, out on the surface of one of the blobs. The fluid is
+/// stirred by these once the ferrofluid has taken over, so the smoke is dragged
+/// by the spikes rather than by beads that are no longer visible.
+fn spike_tip(i: u32, t: f32) -> vec3<f32> {
+    let blob = i % BLOB_COUNT;
+    let dir = sphere_direction(i / BLOB_COUNT, 96u);
+    let reach = BLOB_RADIUS + SPIKE_LENGTH * spikes(dir) * u.scene.x;
+    return blob_center(blob, t) + dir * reach;
+}
+
 // Particles are beads strung along a handful of closed space curves. Each curve
 // is a sum of circles at 1x, 3x, 9x, 27x frequency on tilted planes — an
 // epicycle series, so the path is spline-smooth but self-similar at every

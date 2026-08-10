@@ -10,15 +10,15 @@ pub enum Frame {
     Skipped,
 }
 
-use crate::gpu::Gpu;
 use crate::audio::Sync;
-use crate::timeline::{Camera, Director, Stage};
+use crate::gpu::Gpu;
 use crate::passes::bloom::{BloomPass, BloomTargets};
 use crate::passes::fluid::FluidPass;
 use crate::passes::text::TextPass;
 use crate::passes::{
     DEPTH_FORMAT, HDR_FORMAT, particles::ParticlePass, post::PostPass, scene::ScenePass,
 };
+use crate::timeline::{Camera, Director, Stage};
 
 /// The intro cards, in order.
 const CARDS: [&str; 3] = ["smeuch", "is back", "2026"];
@@ -160,8 +160,7 @@ impl Renderer {
 
         let particles = ParticlePass::new(device, &uniform_layout);
         let bloom = BloomPass::new(device, &uniform_layout);
-        let text = TextPass::new(device, &gpu.queue, &uniform_layout, &CARDS)
-            .expect("font atlas");
+        let text = TextPass::new(device, &gpu.queue, &uniform_layout, &CARDS).expect("font atlas");
         let post = PostPass::new(
             device,
             &uniform_layout,
@@ -256,7 +255,7 @@ impl Renderer {
                 stage.scroll,
             ],
             card: [stage.scale, stage.card_progress, 0.0, 0.0],
-            scene: [stage.spike, stage.dissolve, 0.0, 0.0],
+            scene: [stage.spike, stage.dissolve, stage.burst, 0.0],
             frame: [music.dt.min(1.0 / 30.0), 0.0, 0.0, 0.0],
         }
     }
@@ -297,13 +296,17 @@ impl Renderer {
             &self.targets.depth,
             &self.uniform_bind_group,
         );
-        self.particles.draw(
-            &mut encoder,
-            &self.targets.hdr,
-            &self.targets.depth,
-            &self.uniform_bind_group,
-            PARTICLE_COUNT,
-        );
+        // The beads fade out as the ferrofluid takes over; once they are gone
+        // there is no reason to keep drawing them.
+        if stage.spike < 0.99 {
+            self.particles.draw(
+                &mut encoder,
+                &self.targets.hdr,
+                &self.targets.depth,
+                &self.uniform_bind_group,
+                PARTICLE_COUNT,
+            );
+        }
         self.fluid
             .draw(&mut encoder, &self.targets.hdr, &self.uniform_bind_group);
         // Before bloom, so the fireflies and letterforms feed it.

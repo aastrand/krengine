@@ -85,7 +85,11 @@ impl PostPass {
         }
     }
 
-    pub fn make_bind_group(&self, device: &wgpu::Device, hdr: &wgpu::TextureView) -> wgpu::BindGroup {
+    pub fn make_bind_group(
+        &self,
+        device: &wgpu::Device,
+        hdr: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("hdr bind group"),
             layout: &self.hdr_layout,

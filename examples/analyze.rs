@@ -169,16 +169,16 @@ fn main() -> anyhow::Result<()> {
     println!("bpms seen:   {:?}", stats.bpms);
 
     // A tracker "beat" is 24 ticks, so rows-per-beat falls out of the speed.
-    if let Some((&speed, _)) = stats.speeds.iter().max_by_key(|(_, n)| **n) {
-        if let Some((&bpm, _)) = stats.bpms.iter().max_by_key(|(_, n)| **n) {
-            let rows_per_beat = 24.0 / speed as f32;
-            let row_seconds = speed as f32 * 2.5 / bpm as f32;
-            println!(
-                "\n=> {rows_per_beat} rows/beat, {:.0} ms/row, {:.1} musical BPM",
-                row_seconds * 1000.0,
-                60.0 / (row_seconds * rows_per_beat)
-            );
-        }
+    if let Some((&speed, _)) = stats.speeds.iter().max_by_key(|(_, n)| **n)
+        && let Some((&bpm, _)) = stats.bpms.iter().max_by_key(|(_, n)| **n)
+    {
+        let rows_per_beat = 24.0 / speed as f32;
+        let row_seconds = speed as f32 * 2.5 / bpm as f32;
+        println!(
+            "\n=> {rows_per_beat} rows/beat, {:.0} ms/row, {:.1} musical BPM",
+            row_seconds * 1000.0,
+            60.0 / (row_seconds * rows_per_beat)
+        );
     }
 
     // What the kick actually does, measured rather than assumed.

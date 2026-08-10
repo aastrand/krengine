@@ -10,30 +10,11 @@ struct SceneOut {
 // marching empty space.
 const BOUND_RADIUS: f32 = 1.6;
 /// Extra reach once the spikes are out, so their tips are not clipped away.
-const SPIKE_BOUND: f32 = 0.55;
-
-/// How far the spikes reach at full strength.
-const SPIKE_LENGTH: f32 = 0.42;
+const SPIKE_BOUND: f32 = 0.95;
 
 // How wide the merge fillet is. Large k = strong surface tension: surfaces
 // reach for each other and neck together long before they actually touch.
 const BLEND_K: f32 = 0.40;
-
-/// Ferrofluid spikes.
-///
-/// A field of lobes over the direction from a blob's centre, so the surface
-/// bristles outward along its own normals the way a magnetised fluid does.
-/// Driven by the bass, so the spikes stand up on the beat.
-fn spikes(direction: vec3<f32>) -> f32 {
-    let t = u.time * 0.4;
-    // Three offset lobe fields, so the spacing does not read as a grid.
-    let a = sin(direction.x * 7.0 + t) * sin(direction.y * 7.0 - t) * sin(direction.z * 7.0);
-    let b = sin(direction.x * 4.3 - t) * sin(direction.y * 4.3) * sin(direction.z * 4.3 + t);
-    let lobes = abs(a) * 0.65 + abs(b) * 0.35;
-
-    // A high power turns rounded bumps into points.
-    return pow(lobes, 4.0);
-}
 
 // A single blob. Each one breathes on its own axes and carries a slow surface
 // ripple, so no two are the same shape at the same moment.
@@ -54,7 +35,10 @@ fn sd_blob(q: vec3<f32>, r: f32, seed: f32) -> f32 {
 
     // Spikes push the surface out along the direction from this blob's centre.
     let direction = q / max(length(q), 1.0e-4);
-    let bristle = spikes(direction) * u.scene.x * (0.35 + u.audio.x * 0.9) * SPIKE_LENGTH;
+    // Far more reactive than the blob's own breathing: the bass drives the
+    // length directly and the beat pulse kicks it further.
+    let drive = 0.25 + u.audio.x * 1.5 + u.audio.w * 0.8;
+    let bristle = spikes(direction) * u.scene.x * drive * SPIKE_LENGTH;
 
     return ellipsoid - ripple * 0.03 - bristle;
 }
@@ -174,6 +158,17 @@ fn shade_inner(p: vec3<f32>, rd: vec3<f32>) -> vec3<f32> {
     let ao = blob_ao(p, n);
     let shadow = blob_shadow(p, l);
 
+    // Spike tips glint: the further out along a spike a point is, the more it
+    // catches, and the highs make them twinkle.
+    let from_center = length(p);
+    let tip = smoothstep(BLOB_RADIUS * 0.9, BLOB_RADIUS + SPIKE_LENGTH * 0.7, from_center)
+        * u.scene.x;
+    let sparkle = pow(
+        smoothstep(0.55, 1.0, vnoise(normalize(p) * 24.0 + vec3<f32>(0.0, u.time * 1.6, 0.0))),
+        2.0,
+    );
+    let glint = tip * (0.12 + sparkle * 0.9) * (0.25 + band(13u) * 0.9);
+
     let spec = pow(max(dot(refl_dir, l), 0.0), 220.0) * 5.0 * shadow;
     let sheen = pow(max(dot(n, l), 0.0), 2.0) * 0.12 * shadow;
 
@@ -184,7 +179,13 @@ fn shade_inner(p: vec3<f32>, rd: vec3<f32>) -> vec3<f32> {
     // the room, just less of it.
     let reflected = refl * fres * tint * meniscus * mix(1.0, ao, 0.6);
 
-    return reflected + vec3<f32>(1.0, 0.94, 0.86) * spec + tint * sheen + glow * ao;
+    return reflected
+        + vec3<f32>(1.0, 0.94, 0.86) * spec
+        + tint * sheen
+        + glow * ao
+        // Tinted rather than white: a white highlight this large washes the
+        // steel out entirely.
+        + mix(vec3<f32>(0.75, 0.82, 1.0), VEIN_CORE, 0.35) * glint;
 }
 
 @vertex
