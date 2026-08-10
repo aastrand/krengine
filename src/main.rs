@@ -3,6 +3,8 @@ mod gpu;
 mod passes;
 mod renderer;
 mod shader;
+mod text;
+mod timeline;
 
 use std::path::PathBuf;
 use std::sync::Arc;

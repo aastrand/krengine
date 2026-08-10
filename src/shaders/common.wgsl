@@ -19,6 +19,10 @@ struct Uniforms {
     debug: vec4<f32>,
     /// Per-frame values: (delta time, unused, unused, unused).
     frame: vec4<f32>,
+    /// Intro state: (card index or -1, card opacity, scene fade, drift).
+    intro: vec4<f32>,
+    /// Card presentation: (scale, unused, unused, unused).
+    card: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;

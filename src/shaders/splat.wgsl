@@ -22,7 +22,7 @@ const SPLAT_RADIUS: f32 = 0.020;
 /// Grid aspect, so a bead stays round on a non-square grid.
 const GRID_ASPECT: f32 = 768.0 / 432.0;
 /// How strongly a bead's motion is imposed on the fluid touching it.
-const COUPLING: f32 = 82.0;
+const COUPLING: f32 = 22.0;
 /// How much dye a bead sheds. Far lower than the sampled version used: every
 /// bead emits now, not one in eight.
 const EMISSION: f32 = 0.32;

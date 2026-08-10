@@ -9,9 +9,12 @@
 /// How much of the blurred highlights to mix back in.
 const BLOOM_STRENGTH: f32 = 0.55;
 
-/// Vignette: where the darkening starts and how deep it goes.
-const VIGNETTE_START: f32 = 0.45;
-const VIGNETTE_STRENGTH: f32 = 0.85;
+/// Vignette: where the darkening starts and how deep it goes. A gentle,
+/// wide falloff bands more readily than a strong narrow one, so this is
+/// deliberately paired with the dither below.
+const VIGNETTE_START: f32 = 0.52;
+const VIGNETTE_STRENGTH: f32 = 0.68;
+
 
 // Narkowicz ACES approximation.
 fn tonemap(x: vec3<f32>) -> vec3<f32> {
@@ -107,8 +110,16 @@ fn fs_main(in: FullscreenOut) -> @location(0) vec4<f32> {
     let grey = dot(color, vec3<f32>(0.299, 0.587, 0.114));
     color = mix(color, vec3<f32>(grey), falloff * 0.35);
 
-    let grain = fract(sin(dot(in.pos.xy + u.time, vec2<f32>(12.9898, 78.233))) * 43758.5453);
-    color = color + (grain - 0.5) * 0.012;
+    // Dither before the swapchain quantises to 8 bits. Smooth gradients — the
+    // vignette above all — step visibly without it, since 8 bits cannot
+    // resolve a slow ramp across a thousand pixels.
+    //
+    // Two independent samples make a triangular distribution rather than a
+    // uniform one: the same amount of noise hides banding far better and reads
+    // as texture instead of as static.
+    let n1 = fract(sin(dot(in.pos.xy + u.time, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+    let n2 = fract(sin(dot(in.pos.xy - u.time, vec2<f32>(39.3467, 11.135))) * 24634.6345);
+    color = color + (n1 + n2 - 1.0) * (1.6 / 255.0);
 
     return vec4<f32>(band_overlay(in.pos.xy, color), 1.0);
 }

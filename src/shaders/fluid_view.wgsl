@@ -76,6 +76,6 @@ fn fs_main(in: FullscreenOut) -> @location(0) vec4<f32> {
     // only the shear layers catch light.
     let color = mix(TINT_SHADE, TINT_LIT, pow(lit, 2.2));
 
-    let coverage = clamp(dye * 1.1, 0.0, 1.0) * OPACITY * occlusion;
+    let coverage = clamp(dye * 1.1, 0.0, 1.0) * OPACITY * occlusion * u.intro.z;
     return vec4<f32>(color * coverage, coverage);
 }

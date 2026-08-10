@@ -42,5 +42,5 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         discard;
     }
 
-    return vec4<f32>(in.tint, smoothstep(1.0, 0.55, r) * 0.92);
+    return vec4<f32>(in.tint, smoothstep(1.0, 0.55, r) * 0.92 * u.intro.z);
 }

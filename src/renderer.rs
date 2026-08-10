@@ -12,11 +12,16 @@ pub enum Frame {
 
 use crate::gpu::Gpu;
 use crate::audio::Sync;
+use crate::timeline::Stage;
 use crate::passes::bloom::{BloomPass, BloomTargets};
 use crate::passes::fluid::FluidPass;
+use crate::passes::text::TextPass;
 use crate::passes::{
     DEPTH_FORMAT, HDR_FORMAT, particles::ParticlePass, post::PostPass, scene::ScenePass,
 };
+
+/// The intro cards, in order.
+const CARDS: [&str; 3] = ["smeuch", "is back", "2026"];
 
 /// Supersampling factor. The scene renders at this multiple of the window and
 /// the post pass filters it down — with a linear sampler, 2x is an exact 2x2
@@ -43,6 +48,9 @@ struct Uniforms {
     bands: [[f32; 4]; crate::audio::BAND_COUNT / 4],
     debug: [f32; 4],
     frame: [f32; 4],
+    /// (card index, card opacity, scene fade, drift).
+    intro: [f32; 4],
+    card: [f32; 4],
 }
 
 /// Offscreen render targets, rebuilt whenever the window resizes.
@@ -99,6 +107,7 @@ pub struct Renderer {
     fluid: FluidPass,
     particles: ParticlePass,
     bloom: BloomPass,
+    text: TextPass,
     post: PostPass,
 
     targets: Targets,
@@ -147,6 +156,8 @@ impl Renderer {
 
         let particles = ParticlePass::new(device, &uniform_layout);
         let bloom = BloomPass::new(device, &uniform_layout);
+        let text = TextPass::new(device, &gpu.queue, &uniform_layout, &CARDS)
+            .expect("font atlas");
         let post = PostPass::new(
             device,
             &uniform_layout,
@@ -167,6 +178,7 @@ impl Renderer {
             fluid,
             particles,
             bloom,
+            text,
             post,
             targets,
             bloom_targets,
@@ -187,7 +199,7 @@ impl Renderer {
         self.hdr_bind_group = self.post.make_bind_group(&gpu.device, &self.targets.hdr);
     }
 
-    fn uniforms(gpu: &Gpu, music: &Sync, show_bands: bool) -> Uniforms {
+    fn uniforms(gpu: &Gpu, music: &Sync, show_bands: bool, stage: &Stage) -> Uniforms {
         let time = music.time;
         // Slow orbit with a gentle rise and fall — no input needed, it's a demo.
         // Beats nudge the camera back a touch, so hits register even in a wide.
@@ -227,12 +239,20 @@ impl Renderer {
             bands: bytemuck::cast(music.bands),
             debug: [if show_bands { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
             // Clamped: a long stall must not blow the simulation up.
+            intro: [
+                stage.card as f32,
+                stage.card_alpha,
+                stage.scene,
+                stage.scroll,
+            ],
+            card: [stage.scale, 0.0, 0.0, 0.0],
             frame: [music.dt.min(1.0 / 30.0), 0.0, 0.0, 0.0],
         }
     }
 
     pub fn render(&mut self, gpu: &Gpu, music: &Sync) -> Frame {
-        let uniforms = Self::uniforms(gpu, music, self.show_bands);
+        let stage = Stage::at(music);
+        let uniforms = Self::uniforms(gpu, music, self.show_bands, &stage);
         gpu.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
@@ -274,6 +294,14 @@ impl Renderer {
         );
         self.fluid
             .draw(&mut encoder, &self.targets.hdr, &self.uniform_bind_group);
+        // Before bloom, so the fireflies and letterforms feed it.
+        self.text.draw(
+            &mut encoder,
+            &self.targets.hdr,
+            &self.uniform_bind_group,
+            stage.card,
+        );
+
         self.bloom
             .draw(&mut encoder, &self.bloom_targets, &self.uniform_bind_group);
         self.post.draw(

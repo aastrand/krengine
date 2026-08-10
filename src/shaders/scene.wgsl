@@ -171,8 +171,12 @@ fn fs_main(in: FullscreenOut) -> SceneOut {
     let ro = u.camera_pos.xyz;
     let rd = camera_ray(in.uv);
 
+    // u.intro.z fades the scene up out of black. It is applied here rather
+    // than in post, or it would fade the intro text along with the scene.
+    let fade = u.intro.z;
+
     var out: SceneOut;
-    out.color = vec4<f32>(environment(rd), 1.0);
+    out.color = vec4<f32>(environment(rd) * fade, 1.0);
     out.depth = 1.0; // background sits at the far plane
 
     let bounds = intersect_sphere(ro, rd, BOUND_RADIUS);
@@ -186,7 +190,7 @@ fn fs_main(in: FullscreenOut) -> SceneOut {
     }
 
     let hit = ro + rd * t;
-    out.color = vec4<f32>(shade_inner(hit, rd), 1.0);
+    out.color = vec4<f32>(shade_inner(hit, rd) * fade, 1.0);
     out.depth = clip_depth(hit);
     return out;
 }
