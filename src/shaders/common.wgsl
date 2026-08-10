@@ -415,6 +415,27 @@ const PULSE_SPEED: f32 = 1.5;
 /// spend most of their time in the clear rather than sitting in the taper.
 const FLOW_FADE: f32 = 0.55;
 
+const UP: vec3<f32> = vec3<f32>(0.0, 1.0, 0.0);
+const FORWARD: vec3<f32> = vec3<f32>(0.0, 0.0, 1.0);
+
+/// normalize() that cannot return NaN.
+///
+/// normalize(vec3(0)) is a division by zero, and the NaN it produces does not
+/// stay where it was made: a NaN multiplied by zero is still NaN, and so is
+/// anything mixed with one at weight zero. So a degenerate vector here does
+/// not merely give this bead a wrong position — it survives every gate meant
+/// to switch the fractal's beads off and poisons the position of every
+/// particle in the demo, which is exactly how the first scene lost its
+/// particles: before the fractal is traced the corridor is all zeros, every
+/// tangent is normalize(0), and mix(orbit, NaN, 0.0) is NaN.
+fn safe_direction(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
+    let squared = dot(v, v);
+    if squared < 1.0e-12 {
+        return fallback;
+    }
+    return v * inverseSqrt(squared);
+}
+
 /// How visible a bead is: gone inside the structure, full in the open. Fading
 /// on the distance field is smooth where pushing beads out of it was not, and
 /// it reads as the string passing behind the architecture.
@@ -458,8 +479,8 @@ fn flow_track(s: f32, string: u32) -> FlowFrame {
     // than stepping from one to the next.
     out.position = mix(a, b, f);
     // The transported frame, so the curl cannot flip where the corridor bends.
-    out.normal = normalize(mix(u.track_frame[index].xyz, u.track_frame[next].xyz, f));
-    out.tangent = normalize(b - a);
+    out.normal = safe_direction(mix(u.track_frame[index].xyz, u.track_frame[next].xyz, f), UP);
+    out.tangent = safe_direction(b - a, FORWARD);
     out.clearance = mix(u.track[index].w, u.track[next].w, f);
     return out;
 }
@@ -489,7 +510,7 @@ fn fractal_flow_bead(i: u32) -> vec4<f32> {
     let wrapped = fract(s / TRACK_LENGTH) * TRACK_LENGTH;
 
     let frame = flow_track(wrapped, string);
-    let binormal = normalize(cross(frame.tangent, frame.normal));
+    let binormal = safe_direction(cross(frame.tangent, frame.normal), UP);
 
     // How wide the helix is right now. A floor, so there is always a curl,
     // plus what the music adds: the softened beat opens it on every hit

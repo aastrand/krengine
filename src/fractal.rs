@@ -194,9 +194,19 @@ pub struct Corridor {
 
 impl Default for Corridor {
     fn default() -> Self {
+        // A straight line, not a heap of coincident points at the origin.
+        //
+        // This is what the shader reads for the whole demo before the fractal
+        // scene is ever traced, and a corridor whose consecutive points are
+        // identical has no tangent — normalize() of the difference is a
+        // division by zero. The resulting NaN does not stay put: it survives
+        // being multiplied by zero and being mixed at weight zero, so it
+        // spread from a bead position nothing was using into the position of
+        // every particle on screen. Degenerate geometry is not harmless just
+        // because nothing is meant to be looking at it.
         Self {
-            points: [Vec3::ZERO; TRACK_POINTS],
-            normals: [Vec3::X; TRACK_POINTS],
+            points: std::array::from_fn(|i| Vec3::Z * (i as f32 * TRACK_STEP)),
+            normals: [Vec3::Y; TRACK_POINTS],
             clearance: [0.0; TRACK_POINTS],
         }
     }
@@ -475,6 +485,41 @@ mod tests {
                 let turn = pair[0].dot(pair[1]);
                 assert!(turn > 0.5, "seed {seed}: frame turned by {turn} at {i}");
             }
+        }
+    }
+
+    /// Every corridor the shader can read must have a tangent at every point,
+    /// including the untraced one it reads for the whole first half of the
+    /// demo. Coincident points have none, and normalize() of the difference
+    /// between them is a NaN that spreads to every particle on screen.
+    #[test]
+    fn corridors_always_have_a_tangent() {
+        let mut traced = Corridor::default();
+        trace_corridor(
+            Vec3::new(1.3, -0.7, 2.1),
+            Vec3::new(0.3, 0.1, 0.9),
+            &mut traced,
+        );
+
+        for (which, corridor) in [("default", Corridor::default()), ("traced", traced)] {
+            for (i, pair) in corridor.points.windows(2).enumerate() {
+                let gap = (pair[1] - pair[0]).length();
+                assert!(
+                    gap > 1.0e-6,
+                    "{which} corridor: points {i} and {} coincide",
+                    i + 1,
+                );
+            }
+            for (i, n) in corridor.normals.iter().enumerate() {
+                assert!(
+                    n.length() > 1.0e-6 && n.is_finite(),
+                    "{which} corridor: frame at {i} is {n:?}",
+                );
+            }
+            assert!(
+                corridor.points.iter().all(|p| p.is_finite()),
+                "{which} corridor has a non-finite point",
+            );
         }
     }
 

@@ -30,16 +30,23 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     // scene that has already sent its particles away.
     let fractal_scene = smoothstep(0.88, 1.0, u.collapse.x);
 
-    var bead = fractal_flow_bead(ii);
+    // Branched rather than mixed with a zero weight. Outside the fractal scene
+    // there is no corridor in the uniform to sample — it is left at zero — and
+    // mixing a bead position from it at weight zero is not a no-op if that
+    // position is not a number.
+    var center = particle_pos(ii, u.time);
+    var visible = 1.0;
+    if fractal_scene > 0.0 {
+        let bead = fractal_flow_bead(ii);
+        center = mix(center, bead.xyz, fractal_scene);
+        visible = mix(1.0, bead.w, fractal_scene);
+    }
     if u.debug.y > 0.5 {
         let forward = camera_ray(vec2<f32>(0.0, 0.0));
         let right = u.camera_right.xyz;
-        bead = vec4<f32>(
-            u.camera_pos.xyz + forward * 4.0 + right * (f32(ii) * 0.05 - 5.0),
-            1.0,
-        );
+        center = u.camera_pos.xyz + forward * 4.0 + right * (f32(ii) * 0.05 - 5.0);
+        visible = 1.0;
     }
-    let center = mix(particle_pos(ii, u.time), bead.xyz, fractal_scene);
 
     let fi = f32(ii);
     // Much bigger against the fractal. The structure fills the frame and the
@@ -55,7 +62,7 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
 
     var out: VsOut;
     out.pos = u.view_proj * vec4<f32>(world, 1.0);
-    out.visible = mix(1.0, bead.w, fractal_scene);
+    out.visible = visible;
     out.scene = fractal_scene;
     out.local = corner;
     // Shades of dark only — no hue, just how black each bead sits.
