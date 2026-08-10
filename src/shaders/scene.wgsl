@@ -11,6 +11,8 @@ struct SceneOut {
 const BOUND_RADIUS: f32 = 1.6;
 /// Extra reach once the spikes are out, so their tips are not clipped away.
 const SPIKE_BOUND: f32 = 0.95;
+/// How much further the arms reach once the body has gathered.
+const SPIKE_GROWTH: f32 = 0.45;
 
 // How wide the merge fillet is. Large k = strong surface tension: surfaces
 // reach for each other and neck together long before they actually touch.
@@ -33,12 +35,29 @@ fn sd_blob(q: vec3<f32>, r: f32, seed: f32) -> f32 {
         * sin(q.y * 6.5 - t * 0.9 + seed * 2.0)
         * sin(q.z * 6.5 + t * 0.7);
 
-    // Spikes push the surface out along the direction from this blob's centre.
-    let direction = q / max(length(q), 1.0e-4);
+    // Spikes push the surface out along the direction from this blob's centre,
+    // in a frame that lags further behind the body the further out it is.
+    //
+    // A point at radius r feels the rotation the body had a moment ago, so
+    // sampling the spike field at angle (spin - lag * r) sweeps the arms back
+    // into trailing curves — the way anything flexible behaves when spun in
+    // water.
+    let radius = max(length(q), 1.0e-4);
+    let lag = max(radius - BLOB_RADIUS, 0.0) * SPIKE_LAG * u.motion.x;
+
+    // Both axes trail, the tilt a little less than the yaw, so the arms sweep
+    // rather than sitting in one plane.
+    let unrotated = q / radius;
+    let direction = rot_x(-(u.motion.z - lag * 0.55)) * (rot_y(-(u.motion.y - lag)) * unrotated);
     // Far more reactive than the blob's own breathing: the bass drives the
     // length directly and the beat pulse kicks it further.
-    let drive = 0.25 + u.audio.x * 1.5 + u.audio.w * 0.8;
-    let bristle = spikes(direction) * u.scene.x * drive * SPIKE_LENGTH;
+    // Kept in check: every unit of reach costs march distance, and the steps
+    // are already short because of the twist.
+    let drive = 0.3 + u.audio.x * 0.85 + u.audio.w * 0.55;
+    // The arms lengthen as the body gathers, so merging and reaching read as
+    // one gesture.
+    let reach = SPIKE_LENGTH * (1.0 + u.motion.x * SPIKE_GROWTH);
+    let bristle = spikes(direction) * u.scene.x * drive * reach;
 
     return ellipsoid - ripple * 0.03 - bristle;
 }
@@ -90,7 +109,9 @@ fn march_inner(ro: vec3<f32>, rd: vec3<f32>, t_min: f32, t_max: f32) -> f32 {
         // Understep: the ripple and the spikes make the field non-Lipschitz,
         // so a full step would punch through them. Spikes are much worse than
         // the ripple, so the factor tightens as they extend.
-        t = t + d * mix(0.7, 0.42, u.scene.x);
+        // The twist shears the field on top of everything else, so the step
+        // shortens again once the arms are trailing.
+        t = t + d * mix(0.7, 0.46, u.scene.x * (0.4 + u.motion.x * 0.6));
         if t > t_max {
             break;
         }
@@ -161,13 +182,19 @@ fn shade_inner(p: vec3<f32>, rd: vec3<f32>) -> vec3<f32> {
     // Spike tips glint: the further out along a spike a point is, the more it
     // catches, and the highs make them twinkle.
     let from_center = length(p);
-    let tip = smoothstep(BLOB_RADIUS * 0.9, BLOB_RADIUS + SPIKE_LENGTH * 0.7, from_center)
-        * u.scene.x;
+    // Only the last fifth of a spike catches: a sheen spread down the flanks
+    // reads as a wet coating rather than as points catching the light.
+    let grown = SPIKE_LENGTH * (1.0 + u.motion.x * SPIKE_GROWTH);
+    let tip = smoothstep(
+        BLOB_RADIUS + grown * 0.62,
+        BLOB_RADIUS + grown * 0.95,
+        from_center,
+    ) * u.scene.x;
     let sparkle = pow(
         smoothstep(0.55, 1.0, vnoise(normalize(p) * 24.0 + vec3<f32>(0.0, u.time * 1.6, 0.0))),
         2.0,
     );
-    let glint = tip * (0.12 + sparkle * 0.9) * (0.25 + band(13u) * 0.9);
+    let glint = tip * (0.10 + sparkle * 0.45) * (0.3 + band(13u) * 0.7);
 
     let spec = pow(max(dot(refl_dir, l), 0.0), 220.0) * 5.0 * shadow;
     let sheen = pow(max(dot(n, l), 0.0), 2.0) * 0.12 * shadow;
@@ -206,7 +233,11 @@ fn fs_main(in: FullscreenOut) -> SceneOut {
     out.color = vec4<f32>(environment(rd) * fade, 1.0);
     out.depth = 1.0; // background sits at the far plane
 
-    let bounds = intersect_sphere(ro, rd, BOUND_RADIUS + SPIKE_BOUND * u.scene.x);
+    let bounds = intersect_sphere(
+        ro,
+        rd,
+        BOUND_RADIUS + SPIKE_BOUND * u.scene.x * (1.0 + u.motion.x * SPIKE_GROWTH),
+    );
     if bounds.y < 0.0 {
         return out;
     }

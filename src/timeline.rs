@@ -26,6 +26,21 @@ const SPIKE_BEATS: f32 = 32.0;
 /// beats reads as a fade, not as an event.
 const SPIKE_RAMP: f32 = 6.0;
 
+/// When the blobs start gathering into one, and how long that takes.
+const MERGE_BEATS: f32 = SPIKE_BEATS + 8.0;
+const MERGE_RAMP: f32 = 16.0;
+/// When it starts turning.
+const SPIN_BEATS: f32 = SPIKE_BEATS + 20.0;
+/// Turn rate at rest, and how much the music adds on top.
+const SPIN_BASE: f32 = 0.22;
+const SPIN_FROM_BASS: f32 = 2.5;
+const SPIN_FROM_BEAT: f32 = 1.1;
+/// How much smoke the arms shed once they are trailing. A wisp, not a scene.
+const OCTOPUS_SMOKE: f32 = 0.15;
+
+/// The second axis runs slower, so the two never resolve into one tumble.
+const TILT_RATIO: f32 = 0.37;
+
 /// How far a card travels while it is on screen, in cap heights.
 const SCROLL_RANGE: f32 = 1.5;
 
@@ -50,6 +65,14 @@ pub struct Stage {
     pub dissolve: f32,
     /// Extra dye shed during a transition, to give the wipe a front.
     pub burst: f32,
+    /// How far the blobs have gathered into a single body, 0 to 1.
+    pub merge: f32,
+    /// How much smoke there is: full in the first scene, gone through the
+    /// change, then a little again once the arms are trailing.
+    pub smoke: f32,
+    /// How far the body has wound up, 0 to 1. The angles themselves live in
+    /// `Spin`, since a rate that follows the music has to be integrated.
+    pub winding: f32,
 }
 
 impl Stage {
@@ -100,9 +123,18 @@ impl Stage {
             0.0
         };
 
+        let merge = smoothstep(MERGE_BEATS, MERGE_BEATS + MERGE_RAMP, beats);
+
+        // The gap between the two is deliberate: the smoke clears completely
+        // before the arms start shedding their own.
+        let smoke = (1.0 - spike).max(merge * OCTOPUS_SMOKE);
+
         Self {
             card,
             card_alpha,
+            merge,
+            smoke,
+            winding: smoothstep(SPIN_BEATS, SPIN_BEATS + 12.0, beats),
             spike,
             dissolve,
             burst,
@@ -430,4 +462,28 @@ fn spline(points: &[[f32; 3]], t: f32) -> Vec3 {
         + (p2 - p0) * f
         + (p0 * 2.0 - p1 * 5.0 + p2 * 4.0 - p3) * f * f
         + (p1 * 3.0 - p0 - p2 * 3.0 + p3) * f * f * f)
+}
+
+/// The body's accumulated rotation.
+///
+/// Two axes, and the rate follows the music — which is why this is integrated
+/// rather than written as a function of time. Bass drives the yaw, so the thing
+/// visibly winds up when the track does.
+#[derive(Default)]
+pub struct Spin {
+    pub yaw: f32,
+    pub tilt: f32,
+}
+
+impl Spin {
+    pub fn update(&mut self, music: &Sync, stage: &Stage) -> &Self {
+        let drive = SPIN_BASE + music.low * SPIN_FROM_BASS + music.beat * SPIN_FROM_BEAT;
+        let rate = drive * stage.winding;
+
+        self.yaw += rate * music.dt;
+        // Not a whole-number ratio of the yaw, or the two would keep syncing
+        // up and the tumble would look periodic.
+        self.tilt += rate * TILT_RATIO * music.dt;
+        self
+    }
 }

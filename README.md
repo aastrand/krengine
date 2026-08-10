@@ -37,7 +37,145 @@ examples/
   analyze.rs     dumps a module's tempo, kick period and per-channel layout
 ```
 
-A frame runs: scene → fluid → particles → text → bloom → post.
+## Architecture
+
+Two threads and one direction of travel. The audio callback owns the tune and
+writes into shared state; the render thread reads it, turns it into a handful of
+numbers, and every one of those numbers reaches the GPU through a single uniform
+buffer. No pass has state of its own beyond its textures.
+
+```
+                    ┌─────────────────────────────────────────┐
+  audio thread      │ xmrsplayer ── mix ──> sound card        │
+  (cpal callback)   │      │            │                     │
+                    │      │            └─> sample counter    │
+                    │      └─> ring buffer (8192 mono samples)│
+                    └──────────────┬──────────────────────────┘
+                                   │  SharedState: frames, ring,
+                                   │  row/pattern, bpm, latency
+                                   │  (atomics, never blocking)
+                    ┌──────────────▼──────────────────────────┐
+  render thread     │ audio.rs   Music::sample(dt) ──> Sync   │
+  (winit, one       │              clock, FFT, onsets, accents │
+   RedrawRequested  ├─────────────────────────────────────────┤
+   per frame)       │ timeline.rs Stage::at / Director / Spin  │
+                    │              what is on screen, and where│
+                    │              the camera is              │
+                    ├─────────────────────────────────────────┤
+                    │ renderer.rs Uniforms ──> uniform buffer │
+                    │              one write per frame        │
+                    └──────────────┬──────────────────────────┘
+                                   │  @group(0) for every pass,
+                                   │  vertex + fragment + compute
+                    ┌──────────────▼──────────────────────────┐
+  GPU               │ passes/*.rs  encode one command buffer  │
+                    │ shaders/*.wgsl (common.wgsl prepended)  │
+                    └─────────────────────────────────────────┘
+```
+
+`Sync` is the only thing that crosses from sound to picture, and `Uniforms` the
+only thing that crosses from CPU to GPU. Anything that wants to react to the
+music reads a field of the uniform block — which is why the timeline is a table
+in one file rather than time comparisons scattered through the shaders.
+
+### Targets
+
+```
+  scene ─┐
+         ├──> hdr (rgba16f, RENDER_SCALE x window) ──┬──> bloom mip chain ──┐
+  fluid ─┤                                            │    (½ … 1/32)        │
+  text  ─┘    depth (d32f, same size)                 └──> post ◀────────────┘
+                 ▲ written by the raymarch,               │  tonemap, resolve,
+                 │ read by particles and fluid            ▼  transition wipe
+                 └── so the SDF sorts against          swapchain (sRGB)
+                     rasterised geometry
+```
+
+Bloom is allocated from the *window* size, not the supersampled scene: blurred
+highlights gain nothing from the extra pixels. The middle fluid sheet's dye is
+bound a second time as the transition mask, which is why post takes two
+different views of fluid output.
+
+## A frame
+
+`render()` in `renderer.rs` is the whole of it, in order:
+
+```
+  1  Stage::at(music)          timeline → card, fades, spike, dissolve, smoke
+  2  Director::update(music)   cut list → eye, target, fov
+  3  Spin::update(music)       integrate yaw/tilt at a music-driven rate
+  4  write_buffer(uniforms)    one upload; view_proj, audio, bands, stage
+  5  acquire swapchain texture (Outdated/Lost → reconfigure and try next frame)
+
+  6  fluid.simulate     compute, per sheet (skipped when smoke ≈ 0)
+       advect velocity → splat beads in → vorticity → divergence
+       → 18x jacobi → project → advect dye → splat dye in
+  7  scene.draw         fullscreen raymarch → hdr + depth
+  8  particles.draw     beads, depth-tested (skipped once spike ≈ 1)
+  9  fluid.draw         three sheets composited back to front over hdr
+ 10  text.draw          intro cards from the atlas — before bloom, so
+                        letterforms feed the glow
+ 11  bloom.draw         threshold, downsample chain, upsample
+ 12  post.draw          tonemap + resolve hdr, add bloom, apply the dye
+                        mask as the transition wipe → swapchain
+
+ 13  submit, present
+```
+
+Steps 6, 8 and 10 drop out when the timeline says there is nothing there —
+work skipped rather than multiplied by zero.
+
+## How time flows
+
+Nothing in the demo reads a wall clock except the clock itself. There is one
+timebase in seconds and one in beats, and everything hangs off those two.
+
+```
+  wall time (Instant)         audio sample counter
+        │                             │
+        │  smooth, free-running       │  exact, arrives in ~21ms steps
+        └──────────────┬──────────────┘
+                       ▼
+             Music::clock()   wall + slow-filtered error − output latency + skip
+                       │      monotonic: never steps backwards
+                       ▼
+                 music.time  ──────────────────> intro cards, scene fade
+                       │                          (CARDS, SCENE_START)
+                       │ x bpm/60
+                       ▼
+            music.beat_phase  ──────────────────> scene changes: spike, merge,
+                  ▲    │                          dissolve, winding
+   phase-lock ────┘    │                          shot lengths, in beats
+   from on-beat onsets └──> bar_phase (÷4)
+```
+
+And the two event streams, both from the same FFT:
+
+```
+  ring buffer ──> Hann window ──> FFT 2048 ──> 16 log bands ──> uniforms.bands
+                                                    │
+                       spectral flux on bands 0..4  │  flux over all 16 bands
+                                    ▼               ▼
+                              onset detector    accent detector
+                              (sensitivity 1.8) (sensitivity 3.4)
+                                    │               │
+                        pulse ──> music.beat        └──> music.hard_hit
+                        attack/decay envelope            single frame, true
+                                    │                    on an arrangement hit
+                                    ▼                         │
+                     card breathing, recoil, spin rate        ▼
+                                                     Director cuts to the
+                                                     next shot
+```
+
+A shot's beat count is when it becomes *willing* to cut; `hard_hit` is what
+actually cuts it, with `CUT_GRACE` beats of patience before it gives up and cuts
+anyway. So the structure is counted in beats and the edits land on accents.
+
+With no module on the command line there is no audio thread: `main.rs` fills a
+`Sync` from wall time and leaves every band at zero. The timeline still runs —
+`beat_phase` stays at zero, so the scene changes never fire and you get the
+first scene, held.
 
 ## How it works
 

@@ -23,8 +23,10 @@ struct Uniforms {
     intro: vec4<f32>,
     /// Card presentation: (scale, progress, unused, unused).
     card: vec4<f32>,
-    /// Scene state: (spike amount, dissolve, unused, unused).
+    /// Scene state: (spike amount, dissolve, dye burst, smoke).
     scene: vec4<f32>,
+    /// Body motion: (merge, yaw, tilt, unused).
+    motion: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -126,11 +128,14 @@ const BLOB_COUNT: u32 = 6u;
 
 fn blob_center(i: u32, t: f32) -> vec3<f32> {
     let fi = f32(i);
-    return vec3<f32>(
+    let orbit = vec3<f32>(
         sin(t * 0.53 + fi * 1.7) * 0.40,
         cos(t * 0.41 + fi * 2.3) * 0.34,
         sin(t * 0.61 + fi * 0.9) * 0.40,
     );
+    // u.motion.x draws them together into one body. They keep their own
+    // breathing and ripple, so the result is lumpy rather than a plain sphere.
+    return orbit * (1.0 - u.motion.x);
 }
 
 /// Roughly where a blob's surface sits: radius plus the blend fillet.
@@ -185,9 +190,12 @@ fn spikes(direction: vec3<f32>) -> f32 {
 }
 
 /// How far the spikes reach at full strength.
-const SPIKE_LENGTH: f32 = 0.62;
+const SPIKE_LENGTH: f32 = 0.31;
 /// Nominal blob radius, for placing things on the surface.
 const BLOB_RADIUS: f32 = 0.34;
+/// Radians of lag per unit of distance from the centre — what curves the arms
+/// back as the body turns.
+const SPIKE_LAG: f32 = 2.6;
 
 /// Evenly spread directions over a sphere, by golden angle.
 fn sphere_direction(i: u32, count: u32) -> vec3<f32> {
@@ -198,14 +206,30 @@ fn sphere_direction(i: u32, count: u32) -> vec3<f32> {
     return vec3<f32>(cos(theta) * radius, y, sin(theta) * radius);
 }
 
+/// How far spike `i` sticks out, before length and drive are applied. Most
+/// directions score near zero — the lobe field is raised to a high power — so
+/// this is what separates an actual arm from a patch of body.
+fn spike_strength(i: u32) -> f32 {
+    return spikes(sphere_direction(i / BLOB_COUNT, 96u));
+}
+
 /// The tip of spike `i`, out on the surface of one of the blobs. The fluid is
 /// stirred by these once the ferrofluid has taken over, so the smoke is dragged
 /// by the spikes rather than by beads that are no longer visible.
 fn spike_tip(i: u32, t: f32) -> vec3<f32> {
     let blob = i % BLOB_COUNT;
-    let dir = sphere_direction(i / BLOB_COUNT, 96u);
-    let reach = BLOB_RADIUS + SPIKE_LENGTH * spikes(dir) * u.scene.x;
-    return blob_center(blob, t) + dir * reach;
+
+    // The lobe field is fixed; the body turns underneath it. So a spike that
+    // *appears* along some direction is the field's direction rotated forward
+    // by the body's angle, less the lag it has fallen behind by.
+    let field = sphere_direction(i / BLOB_COUNT, 96u);
+    let reach = BLOB_RADIUS
+        + SPIKE_LENGTH * (1.0 + u.motion.x * 0.45) * spikes(field) * u.scene.x;
+    let lag = max(reach - BLOB_RADIUS, 0.0) * SPIKE_LAG * u.motion.x;
+
+    let direction =
+        rot_y(u.motion.y - lag) * (rot_x(u.motion.z - lag * 0.55) * field);
+    return blob_center(blob, t) + direction * reach;
 }
 
 // Particles are beads strung along a handful of closed space curves. Each curve

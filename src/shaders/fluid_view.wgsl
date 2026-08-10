@@ -74,8 +74,16 @@ fn fs_main(in: FullscreenOut) -> @location(0) vec4<f32> {
 
     // Biased toward the shaded end so the body of the smoke stays dark and
     // only the shear layers catch light.
-    let color = mix(TINT_SHADE, TINT_LIT, pow(lit, 2.2));
+    let lift = mix(0.0, 0.35, smoothstep(0.15, 0.85, u.scene.x));
+    let color = mix(TINT_SHADE, TINT_LIT + vec3<f32>(lift), pow(lit, 2.2));
 
-    let coverage = clamp(dye * 1.1, 0.0, 1.0) * OPACITY * occlusion * u.intro.z;
+    // The arms' smoke is read against a busier frame than the first scene's,
+    // so it carries more weight and sits lighter to stay legible.
+    let presence = mix(1.0, 1.6, smoothstep(0.15, 0.85, u.scene.x));
+    let coverage = clamp(dye * 1.1 * presence, 0.0, 1.0)
+        * OPACITY
+        * occlusion
+        * u.intro.z
+        * min(u.scene.w * 1.6, 1.0);
     return vec4<f32>(color * coverage, coverage);
 }

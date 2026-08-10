@@ -18,7 +18,7 @@ use crate::passes::text::TextPass;
 use crate::passes::{
     DEPTH_FORMAT, HDR_FORMAT, particles::ParticlePass, post::PostPass, scene::ScenePass,
 };
-use crate::timeline::{Camera, Director, Stage};
+use crate::timeline::{Camera, Director, Spin, Stage};
 
 /// The intro cards, in order.
 const CARDS: [&str; 3] = ["smeuch", "is back", "2026"];
@@ -52,6 +52,8 @@ struct Uniforms {
     intro: [f32; 4],
     card: [f32; 4],
     scene: [f32; 4],
+    /// (merge, yaw, tilt, unused).
+    motion: [f32; 4],
 }
 
 /// Offscreen render targets, rebuilt whenever the window resizes.
@@ -119,6 +121,7 @@ pub struct Renderer {
     /// Draws the spectrum as bars over the frame, for picking a band by eye.
     pub show_bands: bool,
     director: Director,
+    spin: Spin,
 }
 
 impl Renderer {
@@ -194,6 +197,7 @@ impl Renderer {
             mask_bind_groups,
             show_bands: false,
             director: Director::default(),
+            spin: Spin::default(),
         }
     }
 
@@ -215,6 +219,7 @@ impl Renderer {
         show_bands: bool,
         stage: &Stage,
         shot: &Camera,
+        spin: &Spin,
     ) -> Uniforms {
         let time = music.time;
         let eye = shot.eye;
@@ -255,7 +260,8 @@ impl Renderer {
                 stage.scroll,
             ],
             card: [stage.scale, stage.card_progress, 0.0, 0.0],
-            scene: [stage.spike, stage.dissolve, stage.burst, 0.0],
+            scene: [stage.spike, stage.dissolve, stage.burst, stage.smoke],
+            motion: [stage.merge, spin.yaw, spin.tilt, 0.0],
             frame: [music.dt.min(1.0 / 30.0), 0.0, 0.0, 0.0],
         }
     }
@@ -263,7 +269,8 @@ impl Renderer {
     pub fn render(&mut self, gpu: &Gpu, music: &Sync) -> Frame {
         let stage = Stage::at(music);
         let shot = self.director.update(music);
-        let uniforms = Self::uniforms(gpu, music, self.show_bands, &stage, &shot);
+        let spin = self.spin.update(music, &stage);
+        let uniforms = Self::uniforms(gpu, music, self.show_bands, &stage, &shot, spin);
         gpu.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
@@ -287,8 +294,14 @@ impl Renderer {
                 label: Some("frame encoder"),
             });
 
-        self.fluid
-            .simulate(&mut encoder, &self.uniform_bind_group, PARTICLE_COUNT);
+        // Once the smoke has cleared there is nothing to solve or draw. The
+        // dissolve mask still samples the dye, but by then its threshold has
+        // swept past everything, so a frozen field reads the same.
+        let fluid_visible = stage.smoke > 0.01;
+        if fluid_visible {
+            self.fluid
+                .simulate(&mut encoder, &self.uniform_bind_group, PARTICLE_COUNT);
+        }
 
         self.scene.draw(
             &mut encoder,
@@ -307,8 +320,10 @@ impl Renderer {
                 PARTICLE_COUNT,
             );
         }
-        self.fluid
-            .draw(&mut encoder, &self.targets.hdr, &self.uniform_bind_group);
+        if fluid_visible {
+            self.fluid
+                .draw(&mut encoder, &self.targets.hdr, &self.uniform_bind_group);
+        }
         // Before bloom, so the fireflies and letterforms feed it.
         self.text.draw(
             &mut encoder,
