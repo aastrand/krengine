@@ -11,7 +11,8 @@ pub enum Frame {
 }
 
 use crate::gpu::Gpu;
-use crate::passes::{DIST_FORMAT, HDR_FORMAT, particles::ParticlePass, post::PostPass, scene::ScenePass};
+use crate::audio::Sync;
+use crate::passes::{DEPTH_FORMAT, HDR_FORMAT, particles::ParticlePass, post::PostPass, scene::ScenePass};
 
 pub const PARTICLE_COUNT: u32 = 512;
 
@@ -27,17 +28,22 @@ struct Uniforms {
     resolution: [f32; 2],
     time: f32,
     particle_count: f32,
+    audio: [f32; 4],
+    music: [f32; 4],
+    /// The FFT spectrum, packed four bands to a vec4 for std140 alignment.
+    bands: [[f32; 4]; crate::audio::BAND_COUNT / 4],
+    debug: [f32; 4],
 }
 
 /// Offscreen render targets, rebuilt whenever the window resizes.
 struct Targets {
     hdr: wgpu::TextureView,
-    dist: wgpu::TextureView,
+    depth: wgpu::TextureView,
 }
 
 impl Targets {
     fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
-        let make = |label, format| {
+        let make = |label, format, usage| {
             device
                 .create_texture(&wgpu::TextureDescriptor {
                     label: Some(label),
@@ -50,16 +56,23 @@ impl Targets {
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    usage,
                     view_formats: &[],
                 })
                 .create_view(&wgpu::TextureViewDescriptor::default())
         };
 
         Self {
-            hdr: make("hdr target", HDR_FORMAT),
-            dist: make("distance target", DIST_FORMAT),
+            hdr: make(
+                "hdr target",
+                HDR_FORMAT,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            ),
+            depth: make(
+                "depth buffer",
+                DEPTH_FORMAT,
+                wgpu::TextureUsages::RENDER_ATTACHMENT,
+            ),
         }
     }
 }
@@ -73,8 +86,9 @@ pub struct Renderer {
     post: PostPass,
 
     targets: Targets,
-    dist_bind_group: wgpu::BindGroup,
     hdr_bind_group: wgpu::BindGroup,
+    /// Draws the spectrum as bars over the frame, for picking a band by eye.
+    pub show_bands: bool,
 }
 
 impl Renderer {
@@ -116,7 +130,6 @@ impl Renderer {
         let post = PostPass::new(device, &uniform_layout, gpu.config.format);
 
         let targets = Targets::new(device, gpu.config.width, gpu.config.height);
-        let dist_bind_group = particles.make_bind_group(device, &targets.dist);
         let hdr_bind_group = post.make_bind_group(device, &targets.hdr);
 
         Self {
@@ -126,22 +139,21 @@ impl Renderer {
             particles,
             post,
             targets,
-            dist_bind_group,
             hdr_bind_group,
+            show_bands: false,
         }
     }
 
     pub fn resize(&mut self, gpu: &Gpu) {
         self.targets = Targets::new(&gpu.device, gpu.config.width, gpu.config.height);
-        self.dist_bind_group = self
-            .particles
-            .make_bind_group(&gpu.device, &self.targets.dist);
         self.hdr_bind_group = self.post.make_bind_group(&gpu.device, &self.targets.hdr);
     }
 
-    fn uniforms(gpu: &Gpu, time: f32) -> Uniforms {
+    fn uniforms(gpu: &Gpu, music: &Sync, show_bands: bool) -> Uniforms {
+        let time = music.time;
         // Slow orbit with a gentle rise and fall — no input needed, it's a demo.
-        let radius = 3.1 + (time * 0.23).sin() * 0.35;
+        // Beats nudge the camera back a touch, so hits register even in a wide.
+        let radius = 3.1 + (time * 0.23).sin() * 0.35 + music.beat * 0.12;
         let eye = Vec3::new(
             (time * 0.17).cos() * radius,
             0.6 + (time * 0.31).sin() * 0.5,
@@ -167,11 +179,20 @@ impl Renderer {
             resolution: [gpu.config.width as f32, gpu.config.height as f32],
             time,
             particle_count: PARTICLE_COUNT as f32,
+            audio: [music.low, music.mid, music.high, music.beat],
+            music: [
+                music.row as f32,
+                music.pattern as f32,
+                music.beat_phase,
+                music.bar_phase,
+            ],
+            bands: bytemuck::cast(music.bands),
+            debug: [if show_bands { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
         }
     }
 
-    pub fn render(&self, gpu: &Gpu, time: f32) -> Frame {
-        let uniforms = Self::uniforms(gpu, time);
+    pub fn render(&self, gpu: &Gpu, music: &Sync) -> Frame {
+        let uniforms = Self::uniforms(gpu, music, self.show_bands);
         gpu.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
@@ -198,14 +219,14 @@ impl Renderer {
         self.scene.draw(
             &mut encoder,
             &self.targets.hdr,
-            &self.targets.dist,
+            &self.targets.depth,
             &self.uniform_bind_group,
         );
         self.particles.draw(
             &mut encoder,
             &self.targets.hdr,
+            &self.targets.depth,
             &self.uniform_bind_group,
-            &self.dist_bind_group,
             PARTICLE_COUNT,
         );
         self.post.draw(

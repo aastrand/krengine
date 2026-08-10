@@ -9,9 +9,22 @@ struct Uniforms {
     resolution: vec2<f32>,
     time: f32,
     particle_count: f32,
+    /// Band envelopes and beat pulse: (low, mid, high, beat).
+    audio: vec4<f32>,
+    /// Song position: (row, pattern, beats elapsed, phase within the bar).
+    music: vec4<f32>,
+    /// FFT spectrum, 16 log-spaced bands packed four to a vector.
+    bands: array<vec4<f32>, 4>,
+    /// Debug switches: (band overlay, unused, unused, unused).
+    debug: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
+
+// Spectrum band `i` (0 = ~40Hz, 15 = ~16kHz).
+fn band(i: u32) -> f32 {
+    return u.bands[i / 4u][i % 4u];
+}
 
 const PI: f32 = 3.14159265;
 const SPHERE_RADIUS: f32 = 1.0;
@@ -31,6 +44,13 @@ fn fullscreen_vertex(vi: u32) -> FullscreenOut {
     out.pos = vec4<f32>(x, y, 0.0, 1.0);
     out.uv = vec2<f32>(x, y);
     return out;
+}
+
+// Depth-buffer value for a world-space point, so the raymarch can write into
+// the same depth buffer rasterized geometry uses.
+fn clip_depth(p: vec3<f32>) -> f32 {
+    let clip = u.view_proj * vec4<f32>(p, 1.0);
+    return clip.z / clip.w;
 }
 
 // Reconstruct a world-space ray direction for an NDC position.
@@ -89,6 +109,57 @@ fn intersect_sphere(ro: vec3<f32>, rd: vec3<f32>, r: f32) -> vec2<f32> {
     return vec2<f32>(-b - sh, -b + sh);
 }
 
+// --- the blobs ----------------------------------------------------------
+//
+// Centre positions live here rather than in scene.wgsl because the particles
+// need to feel the same masses the raymarcher draws.
+
+const BLOB_COUNT: u32 = 6u;
+
+fn blob_center(i: u32, t: f32) -> vec3<f32> {
+    let fi = f32(i);
+    return vec3<f32>(
+        sin(t * 0.53 + fi * 1.7) * 0.40,
+        cos(t * 0.41 + fi * 2.3) * 0.34,
+        sin(t * 0.61 + fi * 0.9) * 0.40,
+    );
+}
+
+/// Roughly where a blob's surface sits: radius plus the blend fillet.
+const BLOB_SURFACE: f32 = 0.55;
+/// How far past the surface a blob still deflects passing beads.
+const BLOB_WAKE: f32 = 0.40;
+/// Extra push on the beat, as a multiple of the resting deflection.
+const BLOB_BEAT_GAIN: f32 = 1.6;
+
+// How the blobs shove the particles around.
+//
+// Two parts: a standing deflection, so beads visibly flow around the blobs
+// instead of sailing through them, and a swell of that same deflection on each
+// beat. Deliberately not an inverse-square force — that grows without bound
+// near the centre, and a bead displaced past a blob flips its force direction
+// and chatters back and forth.
+fn blob_gravity(p: vec3<f32>, t: f32) -> vec3<f32> {
+    let swell = 1.0 + u.audio.w * BLOB_BEAT_GAIN;
+
+    var offset = vec3<f32>(0.0);
+    for (var i = 0u; i < BLOB_COUNT; i = i + 1u) {
+        let d = p - blob_center(i, t);
+        let r = max(length(d), 1.0e-4);
+        let dir = d / r;
+
+        // Hard exclusion inside the surface, plus a soft wake outside it that
+        // fades with distance.
+        let exclusion = max(BLOB_SURFACE - r, 0.0);
+        let wake = BLOB_WAKE * exp(-max(r - BLOB_SURFACE, 0.0) / BLOB_WAKE);
+
+        // Never displace a bead further than it is from the centre, so it can
+        // be pushed away but never dragged through.
+        offset = offset + dir * min((exclusion + wake * 0.45) * swell, r * 0.85);
+    }
+    return offset;
+}
+
 // Particles are beads strung along a handful of closed space curves. Each curve
 // is a sum of circles at 1x, 3x, 9x, 27x frequency on tilted planes — an
 // epicycle series, so the path is spline-smooth but self-similar at every
@@ -132,7 +203,8 @@ fn particle_pos(i: u32, t: f32) -> vec3<f32> {
     let s = fract(along / per_curve + t * 0.014 * (1.0 + f32(curve) * 0.23));
     let seed = f32(curve) * 0.37;
 
-    return rot_y(t * 0.06) * (epicycle(s, seed, t) * 1.15);
+    let base = rot_y(t * 0.06) * (epicycle(s, seed, t) * 1.15);
+    return base + blob_gravity(base, t);
 }
 
 // --- environment --------------------------------------------------------
@@ -176,6 +248,14 @@ fn fbm(p: vec3<f32>) -> f32 {
 // is both the backdrop and what the glossy sphere reflects.
 
 const ROOM_RADIUS: f32 = 9.0;
+
+/// The one warm accent in an otherwise cold scene.
+const VEIN_COLOR: vec3<f32> = vec3<f32>(1.0, 0.26, 0.03);
+/// Hotter core, so the thinnest filaments read white-hot rather than flat.
+const VEIN_CORE: vec3<f32> = vec3<f32>(1.0, 0.72, 0.35);
+/// Raise to widen the veins, lower to make them rarer and finer.
+const VEIN_THRESHOLD: f32 = 0.82;
+const VEIN_INTENSITY: f32 = 2.6;
 
 // Height field on the shell's surface. Domain-warped by time, which is what
 // makes the walls look like they're slowly morphing.
@@ -235,8 +315,18 @@ fn environment(rd: vec3<f32>) -> vec3<f32> {
     color = color + vec3<f32>(0.7, 0.8, 1.0) * spec;
     color = color + vec3<f32>(0.25, 0.4, 0.8) * fres * 0.5;
 
-    // Faint emissive veining in the deepest recesses — keeps the dark half alive.
-    color = color + vec3<f32>(0.10, 0.35, 0.55) * smoothstep(0.28, 0.10, h) * 0.35;
+    // Molten veins running through the walls. The whole scene is cool blue, so
+    // these sit opposite it on the wheel and are the only warm thing in frame.
+    //
+    // Ridged noise: folding the height field at its midline turns smooth blobs
+    // into sharp creases, which is what gives filaments rather than patches.
+    let ridge = 1.0 - abs(h * 2.0 - 1.0);
+    let vein = pow(smoothstep(VEIN_THRESHOLD, 1.0, ridge), 2.5);
+
+    // Deep orange body with a hotter core, pushed well above 1.0 so it reads as
+    // emissive through the tonemap — and so bloom has something to catch later.
+    let heat = VEIN_COLOR * vein + VEIN_CORE * pow(vein, 4.0);
+    color = color + heat * VEIN_INTENSITY * (0.75 + u.audio.w * 0.9);
 
     return color;
 }

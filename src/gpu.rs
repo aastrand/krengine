@@ -44,7 +44,18 @@ impl Gpu {
         if let Some(srgb) = caps.formats.iter().copied().find(|f| f.is_srgb()) {
             config.format = srgb;
         }
-        config.present_mode = wgpu::PresentMode::AutoVsync;
+        // FIFO explicitly, not AutoVsync: presentation has to land on a regular
+        // cadence or motion judders even with a perfectly smooth clock.
+        config.present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Fifo) {
+            wgpu::PresentMode::Fifo
+        } else {
+            wgpu::PresentMode::AutoVsync
+        };
+        log::info!(
+            "present mode: {:?} (available: {:?})",
+            config.present_mode,
+            caps.present_modes
+        );
         surface.configure(&device, &config);
 
         Ok(Self {

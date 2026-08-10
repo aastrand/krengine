@@ -4,5 +4,6 @@ pub mod scene;
 
 /// HDR target the scene and particles accumulate into.
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-/// Linear distance-along-ray written by the scene pass, read by particles.
-pub const DIST_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+/// Shared depth buffer. The raymarch writes it explicitly from the hit
+/// distance, so rasterized geometry sorts against the SDF correctly.
+pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;

@@ -14,6 +14,60 @@ fn tonemap(x: vec3<f32>) -> vec3<f32> {
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
+// Debug overlay: the 16 FFT bands as bars, so a band can be picked by eye.
+// Toggled with B. Drawn after tonemapping, so the bars aren't graded.
+const OVERLAY_PAD: f32 = 18.0;
+const OVERLAY_BAR: f32 = 22.0;
+const OVERLAY_HEIGHT: f32 = 150.0;
+/// Bar height is scaled so this level reaches the top of the panel.
+const OVERLAY_FULL_SCALE: f32 = 1.5;
+
+fn band_overlay(pixel: vec2<f32>, color: vec3<f32>) -> vec3<f32> {
+    if u.debug.x < 0.5 {
+        return color;
+    }
+
+    let x0 = OVERLAY_PAD;
+    let x1 = x0 + OVERLAY_BAR * 16.0;
+    let bottom = u.resolution.y - OVERLAY_PAD;
+    let top = bottom - OVERLAY_HEIGHT;
+
+    if pixel.x < x0 || pixel.x > x1 || pixel.y < top || pixel.y > bottom {
+        return color;
+    }
+
+    // Dim backing panel so bars read over a bright scene.
+    var out = mix(color, vec3<f32>(0.02, 0.02, 0.03), 0.72);
+
+    let slot = (pixel.x - x0) / OVERLAY_BAR;
+    let index = u32(floor(slot));
+    // Gap between bars.
+    if fract(slot) > 0.82 {
+        return out;
+    }
+
+    // Gridline at the level the onset detector's floor sits near.
+    let level = clamp(band(index), 0.0, OVERLAY_FULL_SCALE) / OVERLAY_FULL_SCALE;
+    let bar_top = bottom - level * OVERLAY_HEIGHT;
+
+    if pixel.y >= bar_top {
+        // Bands 0-2 drive the onset detector; every 4th is a ruler mark.
+        var tint = vec3<f32>(0.30, 0.65, 1.0);
+        if index < 3u {
+            tint = vec3<f32>(1.0, 0.45, 0.25);
+        } else if index % 4u == 0u {
+            tint = vec3<f32>(1.0, 0.85, 0.35);
+        }
+        out = tint;
+    }
+
+    // Beat pulse as a strip along the bottom of the panel.
+    if pixel.y > bottom - 4.0 {
+        out = mix(vec3<f32>(0.1), vec3<f32>(1.0, 0.3, 0.2), u.audio.w);
+    }
+    return out;
+}
+
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> FullscreenOut {
     return fullscreen_vertex(vi);
@@ -33,5 +87,5 @@ fn fs_main(in: FullscreenOut) -> @location(0) vec4<f32> {
     let grain = fract(sin(dot(in.pos.xy + u.time, vec2<f32>(12.9898, 78.233))) * 43758.5453);
     color = color + (grain - 0.5) * 0.012;
 
-    return vec4<f32>(color, 1.0);
+    return vec4<f32>(band_overlay(in.pos.xy, color), 1.0);
 }

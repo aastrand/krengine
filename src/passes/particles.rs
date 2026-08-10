@@ -1,11 +1,10 @@
-use super::HDR_FORMAT;
+use super::{DEPTH_FORMAT, HDR_FORMAT};
 use crate::shader;
 
-/// Instanced additive billboards orbiting the sphere. Positions are computed in
-/// the vertex shader, so there are no buffers to feed — only a draw call.
+/// Instanced billboards orbiting the blob. Positions are computed in the vertex
+/// shader, so there are no buffers to feed — only a draw call.
 pub struct ParticlePass {
     pipeline: wgpu::RenderPipeline,
-    dist_layout: wgpu::BindGroupLayout,
 }
 
 impl ParticlePass {
@@ -16,23 +15,9 @@ impl ParticlePass {
             include_str!("../shaders/particles.wgsl"),
         );
 
-        let dist_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("scene distance layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
-        });
-
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("particle layout"),
-            bind_group_layouts: &[Some(uniform_layout), Some(&dist_layout)],
+            bind_group_layouts: &[Some(uniform_layout)],
             immediate_size: 0,
         });
 
@@ -67,36 +52,30 @@ impl ParticlePass {
                 })],
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            // Tests against the blob the scene pass wrote, and writes its own
+            // depth so beads sort against each other too.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
         });
 
-        Self {
-            pipeline,
-            dist_layout,
-        }
+        Self { pipeline }
     }
 
-    pub fn make_bind_group(&self, device: &wgpu::Device, dist: &wgpu::TextureView) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("scene distance bind group"),
-            layout: &self.dist_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(dist),
-            }],
-        })
-    }
-
-    /// Loads the existing HDR contents — this pass accumulates on top of the scene.
+    /// Loads the existing HDR contents — this pass draws on top of the scene.
     pub fn draw(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         hdr: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
         uniforms: &wgpu::BindGroup,
-        dist: &wgpu::BindGroup,
         count: u32,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -110,14 +89,20 @@ impl ParticlePass {
                     store: wgpu::StoreOp::Store,
                 },
             })],
-            depth_stencil_attachment: None,
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, uniforms, &[]);
-        pass.set_bind_group(1, dist, &[]);
         pass.draw(0..6, 0..count);
     }
 }

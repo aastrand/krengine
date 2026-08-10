@@ -1,19 +1,7 @@
-use super::{DIST_FORMAT, HDR_FORMAT};
+use super::{DEPTH_FORMAT, HDR_FORMAT};
 use crate::shader;
 
-fn cleared(view: &wgpu::TextureView) -> Option<wgpu::RenderPassColorAttachment<'_>> {
-    Some(wgpu::RenderPassColorAttachment {
-        view,
-        depth_slice: None,
-        resolve_target: None,
-        ops: wgpu::Operations {
-            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-            store: wgpu::StoreOp::Store,
-        },
-    })
-}
-
-/// Fullscreen raymarch of the glossy sphere; writes HDR color + ray distance.
+/// Fullscreen raymarch of the blob; writes HDR color and a real depth value.
 pub struct ScenePass {
     pipeline: wgpu::RenderPipeline,
 }
@@ -41,10 +29,18 @@ impl ScenePass {
                 module: &module,
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
-                targets: &[Some(HDR_FORMAT.into()), Some(DIST_FORMAT.into())],
+                targets: &[Some(HDR_FORMAT.into())],
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            // The shader writes frag_depth itself, so the comparison is a
+            // formality — it just needs to always store what we computed.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -57,13 +53,28 @@ impl ScenePass {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         hdr: &wgpu::TextureView,
-        dist: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
         uniforms: &wgpu::BindGroup,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("scene pass"),
-            color_attachments: &[cleared(hdr), cleared(dist)],
-            depth_stencil_attachment: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: hdr,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
