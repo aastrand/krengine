@@ -533,9 +533,9 @@ impl Music {
 
         // Whole-spectrum peak: the accents a cut should land on.
         let full = bands.iter().copied().fold(0.0f32, f32::max);
-        let hard_hit = self
-            .accent
-            .update_with(full, dt, ACCENT_SENSITIVITY, ACCENT_FLOOR, ACCENT_COOLDOWN);
+        let hard_hit =
+            self.accent
+                .update_with(full, dt, ACCENT_SENSITIVITY, ACCENT_FLOOR, ACCENT_COOLDOWN);
 
         Sync {
             time,
