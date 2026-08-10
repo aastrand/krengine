@@ -47,4 +47,31 @@ mod tests {
             .unwrap_or_else(|e| panic!("{label}: {}", e.emit_to_string(&src)));
         }
     }
+
+    /// The corridor arrays are declared twice — once as a Rust array in the
+    /// uniform struct, once as a WGSL array — and nothing connects them. Get
+    /// the counts out of step and the mismatch is silent: the shader reads
+    /// whatever follows its shorter array, which is the *next* field's data,
+    /// and the picture is merely wrong rather than broken. That is exactly
+    /// what happened when the bundle grew from one string to three.
+    #[test]
+    fn uniform_arrays_match_the_cpu() {
+        let wanted = crate::fractal::STRINGS * crate::fractal::TRACK_POINTS;
+
+        for field in ["track", "track_frame"] {
+            let decl = format!("{field}: array<vec4<f32>, ");
+            let at = COMMON
+                .find(&decl)
+                .unwrap_or_else(|| panic!("{field} not declared in common.wgsl"));
+            let rest = &COMMON[at + decl.len()..];
+            let end = rest.find('>').expect("unterminated array declaration");
+            let declared: usize = rest[..end].trim().parse().expect("array length");
+
+            assert_eq!(
+                declared, wanted,
+                "common.wgsl declares {field} with {declared} entries, but the \
+                 CPU writes {wanted}",
+            );
+        }
+    }
 }

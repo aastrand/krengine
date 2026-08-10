@@ -30,10 +30,12 @@ struct Uniforms {
     /// Room collapse: (amount, bleed, camera's position along the path, the
     /// radius it is gliding at).
     collapse: vec4<f32>,
-    /// The traced corridor the bead string runs along.
-    track: array<vec4<f32>, 192>,
+    /// The traced corridors the bead strings run along, laid end to end:
+    /// STRINGS * TRACK_POINTS entries. Both counts must match fractal.rs — see
+    /// the uniform_arrays_match_the_cpu test in shader.rs.
+    track: array<vec4<f32>, 576>,
     /// A perpendicular at each corridor point, for the curl to wind around.
-    track_frame: array<vec4<f32>, 192>,
+    track_frame: array<vec4<f32>, 576>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;

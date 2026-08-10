@@ -406,6 +406,10 @@ impl Renderer {
                 &self.targets.depth,
                 &self.uniform_bind_group,
                 beads,
+                // The same condition the fluid is drawn on: the beads only
+                // need to lay down depth where there are smoke sheets to
+                // composite against them.
+                fluid_visible,
             );
         }
         if fluid_visible {

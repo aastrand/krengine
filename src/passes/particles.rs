@@ -4,7 +4,10 @@ use crate::shader;
 /// Instanced billboards orbiting the blob. Positions are computed in the vertex
 /// shader, so there are no buffers to feed — only a draw call.
 pub struct ParticlePass {
-    pipeline: wgpu::RenderPipeline,
+    /// Writes depth, for the scenes with smoke in them.
+    occluding: wgpu::RenderPipeline,
+    /// Does not, for the fractal, where the beads overlap each other.
+    blending: wgpu::RenderPipeline,
 }
 
 impl ParticlePass {
@@ -29,58 +32,79 @@ impl ParticlePass {
             operation: wgpu::BlendOperation::Add,
         };
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("particle pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: HDR_FORMAT,
-                    blend: Some(wgpu::BlendState {
-                        color: over,
-                        alpha: over,
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+        // Whether the beads write depth is the one thing that differs, and it
+        // cannot be the same in both scenes.
+        //
+        // Writing it makes them clip each other rather than blend: a bead's
+        // quad covers a square, most of it the soft fringe the fragment shader
+        // fades out, and the depth goes down across all of it — so the bead
+        // behind is cut off along that square's edge, the hard crescent that
+        // showed wherever two overlapped. Alpha blending and depth writing the
+        // same geometry cannot both be right.
+        //
+        // But the fluid composites its smoke sheets against this same depth
+        // buffer, so beads that write nothing are buried under the smoke —
+        // which is where the first scene's particles went when this pass
+        // stopped writing depth outright.
+        //
+        // So: the scenes with smoke keep the depth and put up with the
+        // crescents, which barely arise there because the beads are small and
+        // spread thinly around the blob. The fractal, which has no fluid at
+        // all and whose strings are dense enough that beads constantly
+        // overlap, drops it and blends properly.
+        let targets = [Some(wgpu::ColorTargetState {
+            format: HDR_FORMAT,
+            blend: Some(wgpu::BlendState {
+                color: over,
+                alpha: over,
             }),
-            primitive: wgpu::PrimitiveState::default(),
-            // Tests against what the scene pass wrote, so the structure
-            // occludes the beads — but writes no depth of its own.
-            //
-            // Writing it made the beads clip each other rather than blend: a
-            // bead's quad covers a square, most of which is the soft fringe
-            // the fragment shader fades out, and depth was written across all
-            // of it. The next bead behind was then cut off along that square's
-            // edge, which is the hard crescent that showed wherever two
-            // overlapped. Depth-writing and alpha-blending the same geometry
-            // cannot both work; these are dark ink dots laid over the scene,
-            // so blending is the half that matters. They no longer sort
-            // against one another, which costs nothing: they are all the same
-            // near-black, and overlapping ones simply read as denser ink.
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+            write_mask: wgpu::ColorWrites::ALL,
+        })];
 
-        Self { pipeline }
+        let make = |label, depth_write| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &targets,
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                // Always tests, so whatever the scene pass drew occludes them.
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(depth_write),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+
+        let occluding = make("beads over smoke", true);
+        let blending = make("beads on a string", false);
+
+        Self {
+            occluding,
+            blending,
+        }
     }
 
     /// Loads the existing HDR contents — this pass draws on top of the scene.
+    ///
+    /// `over_smoke` picks the pipeline: set it wherever the fluid is drawing,
+    /// so the beads lay down depth for its sheets to composite against.
     pub fn draw(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -88,6 +112,7 @@ impl ParticlePass {
         depth: &wgpu::TextureView,
         uniforms: &wgpu::BindGroup,
         count: u32,
+        over_smoke: bool,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("particle pass"),
@@ -112,7 +137,11 @@ impl ParticlePass {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(if over_smoke {
+            &self.occluding
+        } else {
+            &self.blending
+        });
         pass.set_bind_group(0, uniforms, &[]);
         pass.draw(0..6, 0..count);
     }
