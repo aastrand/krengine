@@ -35,3 +35,8 @@ jobs:
 
       - name: Build
         run: cargo build --release --all-targets
+
+      # No GPU here, so these are the checks that do not need one: the shaders
+      # go through naga, and the camera and corridor maths run on the CPU.
+      - name: Test
+        run: cargo test --release

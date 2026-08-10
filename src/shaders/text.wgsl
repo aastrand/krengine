@@ -68,9 +68,11 @@ fn text_to_clip(p: vec2<f32>) -> vec4<f32> {
     let scrolled = p + vec2<f32>(u.intro.w, 0.0);
     // u.card.x is how near the card reads: bigger is closer.
     let scale = TEXT_SCALE * u.card.x;
+    // u.card.z shifts the card in clip space, so its height does not change
+    // with its size.
     return vec4<f32>(
-        scrolled.x * scale / aspect * 2.0,
-        (scrolled.y - 0.35) * scale * 2.0,
+        scrolled.x * scale / aspect * 2.0 + u.card.z,
+        (scrolled.y - 0.35) * scale * 2.0 + u.card.w,
         0.0,
         1.0,
     );
@@ -106,8 +108,23 @@ fn fs_text(in: VsOut) -> @location(0) vec4<f32> {
     let glint = shimmer(in.text_pos);
 
     // Kept above 1.0 where it glints, so bloom picks the highlights up.
-    let ink = vec3<f32>(0.30, 0.31, 0.35) + vec3<f32>(1.0, 0.90, 0.72) * glint;
+    let bright = vec3<f32>(0.30, 0.31, 0.35) + vec3<f32>(1.0, 0.90, 0.72) * glint;
 
-    let alpha = coverage * u.intro.y;
+    // Credits shimmer the other way: near-black already, they cannot glint
+    // lighter, so the sweep drives them to pure black instead. Against a lit
+    // room that reads as a highlight passing over — just an inverted one.
+    let dark = mix(
+        vec3<f32>(0.085, 0.088, 0.10),
+        vec3<f32>(0.0),
+        clamp(glint * 0.85, 0.0, 1.0),
+    );
+
+    // The cards after the three titles are the credits.
+    let credits = step(2.5, u.intro.x);
+    let ink = mix(bright, dark, credits);
+
+    // Credits also thicken slightly as the sweep passes, so the shimmer is
+    // legible on letters this small.
+    let alpha = coverage * u.intro.y * mix(1.0, 0.8 + clamp(glint, 0.0, 1.0) * 0.2, credits);
     return vec4<f32>(ink * alpha, alpha);
 }

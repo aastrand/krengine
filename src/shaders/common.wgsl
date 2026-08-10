@@ -17,16 +17,23 @@ struct Uniforms {
     bands: array<vec4<f32>, 4>,
     /// Debug switches: (band overlay, unused, unused, unused).
     debug: vec4<f32>,
-    /// Per-frame values: (delta time, unused, unused, unused).
+    /// Per-frame values: (delta time, unused, softened beat, unused).
     frame: vec4<f32>,
     /// Intro state: (card index or -1, card opacity, scene fade, drift).
     intro: vec4<f32>,
-    /// Card presentation: (scale, progress, unused, unused).
+    /// Card presentation: (scale, progress, clip x, clip y).
     card: vec4<f32>,
     /// Scene state: (spike amount, dissolve, dye burst, smoke).
     scene: vec4<f32>,
-    /// Body motion: (merge, yaw, tilt, unused).
+    /// Body motion: (merge, yaw, tilt, palette shift).
     motion: vec4<f32>,
+    /// Room collapse: (amount, bleed, camera's position along the path, the
+    /// radius it is gliding at).
+    collapse: vec4<f32>,
+    /// The traced corridor the bead string runs along.
+    track: array<vec4<f32>, 192>,
+    /// A perpendicular at each corridor point, for the curl to wind around.
+    track_frame: array<vec4<f32>, 192>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -279,6 +286,226 @@ fn particle_pos(i: u32, t: f32) -> vec3<f32> {
     return base + blob_gravity(base, t);
 }
 
+// --- the fractal --------------------------------------------------------
+//
+// A mandelbox: fold the space into a box, fold it through a sphere, scale, and
+// repeat. Both folds are distance-preserving enough to keep a usable estimate,
+// so the whole structure costs a dozen iterations per sample.
+//
+// Its scale parameter is what makes it worth using here — sweeping it morphs
+// the shape continuously from open and cathedral-like to dense and spiky, and
+// the structure is self-similar, so diving into it keeps revealing more.
+
+const FRACTAL_ITERATIONS: i32 = 8;
+/// Fold strength. Around 1.2 gives the packed-sphere cathedral; lower opens it
+/// out, higher tightens it into gravel.
+const FRACTAL_FOLD: f32 = 1.22;
+/// How quickly distance washes detail out. Without it the structure is a field
+/// of high-frequency detail with no depth to it, which the eye reads as noise.
+const FRACTAL_FOG: f32 = 0.085;
+
+struct FractalHit {
+    distance: f32,
+    /// How far the orbit was scaled up: how deep in the packing a point sits.
+    trap: f32,
+    /// Closest approach to each axis plane, and to the origin. Different parts
+    /// of the structure come closest to different ones, so this is what tells
+    /// a strut from the face of a sphere.
+    orbit: vec4<f32>,
+};
+
+/// An Apollonian gasket.
+///
+/// Fold space into the unit cell, invert it through a sphere, repeat. Because
+/// the fold is periodic the structure repeats forever, so a camera can glide
+/// through it indefinitely without ever leaving or reaching a middle.
+fn fractal(point: vec3<f32>) -> FractalHit {
+    var p = point;
+    var scale = 1.0;
+    var orbit = vec4<f32>(1000.0);
+
+    for (var i = 0; i < FRACTAL_ITERATIONS; i = i + 1) {
+        // Fold into the cell: this is what makes it repeat.
+        p = -1.0 + 2.0 * fract(0.5 * p + 0.5);
+
+        let squared = max(dot(p, p), 1.0e-6);
+        orbit = min(orbit, vec4<f32>(abs(p), squared));
+
+        // Sphere inversion, which packs the spheres inside each other.
+        let factor = FRACTAL_FOLD / squared;
+        p = p * factor;
+        scale = scale * factor;
+    }
+
+    var out: FractalHit;
+    // Distance to the folded plane, unscaled back to world space.
+    out.distance = 0.25 * abs(p.y) / scale;
+    out.trap = scale;
+    out.orbit = orbit;
+    return out;
+}
+
+/// Must match TRACK_POINTS and TRACK_STEP in fractal.rs.
+const TRACK_POINTS: u32 = 192u;
+const TRACK_STEP: f32 = 0.16;
+/// The corridor's full length in world units: (TRACK_POINTS - 1) * TRACK_STEP.
+const TRACK_LENGTH: f32 = 30.56;
+
+/// Distance between one bead and the next along the corridor, in world units.
+const FLOW_SPACING: f32 = 0.075;
+/// Travel along the corridor, in world units per second. Slow: the string is
+/// meant to drift through the structure, not shoot down it.
+const FLOW_SPEED: f32 = 0.22;
+
+/// The curl. The string does not run down the middle of the corridor — it
+/// winds around it, so the line reads as having a body and a direction of
+/// travel instead of as a wire.
+///
+/// The radius has to stay inside the clearance the corridor was traced for
+/// (fractal.rs TRACK_CLEARANCE), or the curl swings beads into the walls and
+/// they are culled on the way round.
+const CURL_RADIUS: f32 = 0.055;
+/// Radians of winding per world unit — about one turn every 1.2 units.
+const CURL_RATE: f32 = 5.2;
+/// How fast the whole helix rotates about the corridor, in radians per second.
+/// Small: enough that the curl visibly turns, not so much that it spins.
+const CURL_DRIFT: f32 = 0.35;
+
+/// How far the string swings when a beat lands, and how tightly that wave is
+/// wound along it — a longer wavelength makes the whole string move together,
+/// a shorter one ripples.
+const BOUNCE_AMPLITUDE: f32 = 0.055;
+const BOUNCE_WAVELENGTH: f32 = 0.55;
+
+/// How far from either end of the corridor beads fade, in world units. The
+/// string is shorter than the corridor and wraps around it, so without this
+/// the tail bead pops out of existence and reappears at the head.
+const FLOW_FADE: f32 = 2.2;
+
+/// How visible a bead is: gone inside the structure, full in the open. Fading
+/// on the distance field is smooth where pushing beads out of it was not, and
+/// it reads as the string passing behind the architecture.
+fn fractal_flow_visibility(p: vec3<f32>) -> f32 {
+    // Only culled when genuinely buried. The depth buffer already hides beads
+    // behind surfaces, so this only has to catch the ones inside them, and a
+    // wide fade was removing most of the string.
+    return smoothstep(0.0, 0.025, fractal(p).distance);
+}
+
+/// A point on the corridor, with the frame to wind the curl around it.
+struct FlowFrame {
+    position: vec3<f32>,
+    normal: vec3<f32>,
+    tangent: vec3<f32>,
+};
+
+/// The corridor the beads run on: traced against the structure on the CPU and
+/// sampled here by distance along it.
+///
+/// An analytic curve cannot follow a tunnel — it has no idea where the walls
+/// are, so it clips through them. This one was steered by the distance field,
+/// and resampled to uniform arc length so `s` really is a distance.
+fn flow_track(s: f32) -> FlowFrame {
+    let last = f32(TRACK_POINTS - 1u);
+    let position = clamp(s / TRACK_STEP, 0.0, last);
+
+    let index = u32(floor(position));
+    let next = min(index + 1u, TRACK_POINTS - 1u);
+    let f = fract(position);
+
+    let a = u.track[index].xyz;
+    let b = u.track[next].xyz;
+
+    var out: FlowFrame;
+    // Interpolated between traced points, so the string runs smoothly rather
+    // than stepping from one to the next.
+    out.position = mix(a, b, f);
+    // The transported frame, so the curl cannot flip where the corridor bends.
+    out.normal = normalize(mix(u.track_frame[index].xyz, u.track_frame[next].xyz, f));
+    out.tangent = normalize(b - a);
+    return out;
+}
+
+/// A bead in the string.
+///
+/// Every bead sits on the corridor at a fixed spacing behind the one ahead and
+/// the whole string advances together, so it moves like a string being drawn
+/// through the structure rather than like a swarm that happens to share a
+/// direction. Only the head's position is animated; the rest follows from the
+/// spacing.
+///
+/// `w` is how visible the bead is: faded at the ends of the corridor, and gone
+/// where it is inside the structure.
+fn fractal_flow_bead(i: u32) -> vec4<f32> {
+    let place = f32(i);
+
+    // The string wraps around the corridor, so it never runs out of track.
+    let s = u.time * FLOW_SPEED - place * FLOW_SPACING;
+    let wrapped = fract(s / TRACK_LENGTH) * TRACK_LENGTH;
+
+    let frame = flow_track(wrapped);
+    let binormal = normalize(cross(frame.tangent, frame.normal));
+
+    // The curl's phase comes from distance along the corridor, not from the
+    // bead's index — so the helix stands still in space and the beads travel
+    // along it, which is what reads as flow. Phase from the index instead
+    // would carry the whole helix with the string, and the curl would look
+    // painted on.
+    let phase = wrapped * CURL_RATE + u.time * CURL_DRIFT;
+    let curl = (frame.normal * cos(phase) + binormal * sin(phase)) * CURL_RADIUS;
+
+    // A wave running down the string, kicked on each beat. The phase advances
+    // with the beat grid rather than with time, so it stays locked to the
+    // music; the amplitude is the softened beat (u.frame.z, not the pulse
+    // itself, which rises in a single frame and made the string jitter rather
+    // than swing).
+    let beat_phase = place * BOUNCE_WAVELENGTH - u.music.z * 2.0 * PI;
+    let swing = frame.normal * sin(beat_phase) * u.frame.z * BOUNCE_AMPLITUDE;
+
+    let position = frame.position + curl + swing;
+
+    // Faded in at the head of the corridor and out at the tail, so the wrap is
+    // a bead dimming away and another brightening rather than a jump.
+    let ends = smoothstep(0.0, FLOW_FADE, wrapped)
+        * smoothstep(0.0, FLOW_FADE, TRACK_LENGTH - wrapped);
+
+    return vec4<f32>(position, ends * fractal_flow_visibility(position));
+}
+
+/// Where a bead sits on the fractal.
+///
+/// Rather than orbiting in free space, each one is dropped onto the structure:
+/// march inward along its own slowly turning direction and stop at the first
+/// surface. As the direction sweeps, the bead crawls over whatever architecture
+/// is beneath it — so the swarm reads the shape instead of ignoring it.
+fn fractal_surface_point(i: u32, t: f32) -> vec3<f32> {
+    // A slow drift, so the beads creep over the structure rather than skating.
+    let dir = normalize(sphere_direction(i, 512u) + vec3<f32>(
+        sin(t * 0.021 + f32(i)) * 0.22,
+        cos(t * 0.016 + f32(i) * 1.7) * 0.22,
+        sin(t * 0.019 + f32(i) * 0.9) * 0.22,
+    ));
+
+    // Inward from outside the structure.
+    let ro = dir * 9.0;
+    let rd = -dir;
+
+    var travel = 0.0;
+    for (var step = 0; step < 48; step = step + 1) {
+        let d = fractal(ro + rd * travel).distance;
+        if d < 0.004 {
+            break;
+        }
+        travel = travel + d * 0.9;
+        if travel > 12.0 {
+            break;
+        }
+    }
+
+    // Just clear of the surface, so the beads sit on it rather than in it.
+    return ro + rd * (travel - 0.05);
+}
+
 // --- environment --------------------------------------------------------
 
 const SUN_DIR: vec3<f32> = vec3<f32>(0.5, 0.72, -0.48);
@@ -320,9 +547,16 @@ fn fbm(p: vec3<f32>) -> f32 {
 // is both the backdrop and what the glossy sphere reflects.
 
 const ROOM_RADIUS: f32 = 9.0;
+/// What is behind the room once it has gone.
+const VOID_COLOUR: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
 
 /// The one warm accent in an otherwise cold scene.
 const VEIN_COLOR: vec3<f32> = vec3<f32>(1.0, 0.26, 0.03);
+/// What the veins cool to once the ferrofluid has taken the warm role. The
+/// scene only supports one warm element; when the body becomes it, the walls
+/// have to give it up or the two compete.
+const VEIN_COLD: vec3<f32> = vec3<f32>(0.16, 0.48, 0.95);
+const VEIN_COLD_CORE: vec3<f32> = vec3<f32>(0.62, 0.86, 1.0);
 /// Hotter core, so the thinnest filaments read white-hot rather than flat.
 const VEIN_CORE: vec3<f32> = vec3<f32>(1.0, 0.72, 0.35);
 /// Raise to widen the veins, lower to make them rarer and finer.
@@ -345,18 +579,57 @@ fn room_height(dir: vec3<f32>) -> f32 {
     return fbm(dir * 3.4 + warp * 1.6 + vec3<f32>(0.0, t * 0.5, 0.0));
 }
 
-// Where a ray leaves the room shell, seen from inside.
+/// The shell's radius now, which shrinks as the room collapses.
+fn room_radius() -> f32 {
+    return mix(ROOM_RADIUS, 0.0, u.collapse.x);
+}
+
+/// Where a ray meets the room shell. Negative once the shell has shrunk past
+/// the camera and the ray no longer reaches it.
 fn room_hit(ro: vec3<f32>, rd: vec3<f32>) -> f32 {
+    let radius = room_radius();
     let b = dot(ro, rd);
-    let c = dot(ro, ro) - ROOM_RADIUS * ROOM_RADIUS;
-    return -b + sqrt(max(b * b - c, 0.0));
+    let c = dot(ro, ro) - radius * radius;
+    let h = b * b - c;
+    if h < 0.0 {
+        return -1.0;
+    }
+    let root = sqrt(h);
+    let far = -b + root;
+    let near = -b - root;
+    // Inside the shell we want the far wall; outside, the near face of what is
+    // now a receding ball.
+    return select(far, near, near > 0.0);
 }
 
 // Shade the inside of the shell along `rd`.
 fn environment(rd: vec3<f32>) -> vec3<f32> {
     let ro = u.camera_pos.xyz;
-    let p = ro + rd * room_hit(ro, rd);
-    let dir = p / ROOM_RADIUS;
+
+    let distance = room_hit(ro, rd);
+    if distance < 0.0 {
+        // Not flat white: a surface with nothing to reflect reads as noise,
+        // and a silhouette against an even field has no edge. A soft gradient
+        // gives the metal something to pick up and the shape somewhere to sit.
+        let height = rd.y * 0.5 + 0.5;
+        let sky = mix(vec3<f32>(0.62, 0.66, 0.74), VOID_COLOUR, smoothstep(0.35, 1.0, height));
+        let glow = pow(max(dot(rd, normalize(SUN_DIR)), 0.0), 12.0) * 0.35;
+        return sky + vec3<f32>(1.0, 0.97, 0.92) * glow;
+    }
+
+    let p = ro + rd * distance;
+    let dir = p / max(room_radius(), 1.0e-4);
+
+    // The height field is sampled at the hit *point*, scaled by the shell's
+    // full size rather than its current one. At rest the two are identical,
+    // but as the shell contracts the pattern contracts with it, so the walls
+    // are visibly rushing inward.
+    //
+    // Sampling by direction instead — which is what this did — makes a
+    // shrinking sphere look completely static from inside, because the
+    // directions never change. The collapse was invisible until the wall
+    // crossed the camera, and then the whole frame flipped to white at once.
+    let field = p / ROOM_RADIUS;
     let n = -dir; // inward-facing
 
     // Bump mapping: perturb the normal by the height field's tangent gradient.
@@ -364,14 +637,18 @@ fn environment(rd: vec3<f32>) -> vec3<f32> {
     let t1 = normalize(cross(select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(n.y) > 0.9), n));
     let t2 = cross(n, t1);
     let e = 0.035;
-    let h = room_height(dir);
-    let dh1 = (room_height(dir + t1 * e) - h) / e;
-    let dh2 = (room_height(dir + t2 * e) - h) / e;
+    let h = room_height(field);
+    let dh1 = (room_height(field + t1 * e) - h) / e;
+    let dh2 = (room_height(field + t2 * e) - h) / e;
     let nb = normalize(n - (t1 * dh1 + t2 * dh2) * 0.14);
 
     // Albedo and roughness both driven by the same field, so the raised areas
     // read as polished and the recesses as matte.
-    let albedo = mix(vec3<f32>(0.14, 0.17, 0.25), vec3<f32>(0.48, 0.55, 0.72), smoothstep(0.30, 0.78, h));
+    // The room dims as the second scene takes hold, so the body carries the
+    // frame instead of sharing it with the walls.
+    let recede = 1.0 - u.motion.w * 0.45;
+    let albedo = mix(vec3<f32>(0.14, 0.17, 0.25), vec3<f32>(0.48, 0.55, 0.72), smoothstep(0.30, 0.78, h))
+        * recede;
     let rough = clamp(0.85 - h * 0.7, 0.08, 0.95);
 
     let l = normalize(SUN_DIR);
@@ -387,7 +664,7 @@ fn environment(rd: vec3<f32>) -> vec3<f32> {
     // even where the key light doesn't reach.
     let ambient = mix(vec3<f32>(0.10, 0.13, 0.20), vec3<f32>(0.30, 0.35, 0.48), nb.y * 0.5 + 0.5);
 
-    var color = albedo * (ambient + diff * vec3<f32>(0.75, 0.85, 1.05));
+    var color = albedo * (ambient * recede + diff * vec3<f32>(0.75, 0.85, 1.05));
     color = color + vec3<f32>(0.7, 0.8, 1.0) * spec;
     color = color + vec3<f32>(0.25, 0.4, 0.8) * fres * 0.5;
 
@@ -402,7 +679,7 @@ fn environment(rd: vec3<f32>) -> vec3<f32> {
     // Energy travelling through the network. The phase runs on beats rather
     // than seconds, so surges arrive with the music instead of drifting past it.
     let beats = u.music.z;
-    let sweep = dot(dir, normalize(VEIN_FLOW_DIR)) * 5.0 - beats * PI * 2.0 * VEIN_SURGES_PER_BEAT;
+    let sweep = dot(field, normalize(VEIN_FLOW_DIR)) * 5.0 - beats * PI * 2.0 * VEIN_SURGES_PER_BEAT;
     let flow = 0.35 + 0.65 * pow(0.5 + 0.5 * sin(sweep), 3.0);
 
     // The network is also a spectrum: veins low in the room answer to the bass,
@@ -417,8 +694,16 @@ fn environment(rd: vec3<f32>) -> vec3<f32> {
 
     // Deep orange body with a hotter core, kept above 1.0 in the brightest
     // filaments so they still read as emissive through the tonemap.
-    let heat = VEIN_COLOR * vein + VEIN_CORE * pow(vein, 4.0);
-    color = color + heat * VEIN_INTENSITY * flow * flicker * energy * (0.8 + u.audio.w * 0.7);
+    let body_colour = mix(VEIN_COLOR, VEIN_COLD, u.motion.w);
+    let core_colour = mix(VEIN_CORE, VEIN_COLD_CORE, u.motion.w);
+    let heat = body_colour * vein + core_colour * pow(vein, 4.0);
 
-    return color;
+    // Dimmer too: cold veins at the old brightness would just be a different
+    // colour competing, rather than a background.
+    let vein_level = VEIN_INTENSITY * (1.0 - u.motion.w * 0.35);
+    color = color + heat * vein_level * flow * flicker * energy * (0.8 + u.audio.w * 0.7);
+
+    // Whatever is left of the room washes out into the white behind it, so the
+    // last of it does not linger as a dark ball.
+    return mix(color, VOID_COLOUR, smoothstep(0.75, 1.0, u.collapse.x));
 }

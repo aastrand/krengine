@@ -4,8 +4,9 @@ use super::HDR_FORMAT;
 use crate::shader;
 use crate::text::{FontAtlas, GlyphInstance};
 
-/// Every character the cards need.
-const CHARACTERS: &str = "smeuchisback2026 ";
+/// The atlas covers the whole lowercase set rather than only what today's
+/// cards use, so new text does not mean regenerating it.
+const CHARACTERS: &str = "abcdefghijklmnopqrstuvwxyz0123456789:. ";
 
 /// Draws the intro cards and the fireflies lighting them.
 pub struct TextPass {

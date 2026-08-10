@@ -1,4 +1,5 @@
 mod audio;
+mod fractal;
 mod gpu;
 mod passes;
 mod renderer;

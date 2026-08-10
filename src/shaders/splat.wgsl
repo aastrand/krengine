@@ -39,6 +39,8 @@ const EMIT_LIMIT: f32 = 0.045;
 const EMIT_RAMP: f32 = 0.11;
 /// With only the longest arms emitting, each has to shed more to add up.
 const EMIT_BOOST: f32 = 5.0;
+/// How much harder the arms shed while the body is bleeding out into the water.
+const BLEED_EMISSION: f32 = 2.5;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -88,7 +90,11 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) bead: u32) -
 
     // In the second scene, only the arms that are actually out contribute.
     let extended = smoothstep(EMIT_LIMIT, EMIT_LIMIT + EMIT_RAMP, spike_strength(bead));
-    let gate = mix(1.0, extended, smoothstep(0.15, 0.85, u.scene.x));
+    let gate = mix(
+        mix(1.0, extended, smoothstep(0.15, 0.85, u.scene.x)),
+        1.0,
+        u.collapse.y,
+    );
 
     let corner = QUAD[vi];
     // Arms shed a broader plume than a bead's thin wake.
@@ -127,7 +133,9 @@ fn fs_dye(in: VsOut) -> @location(0) vec4<f32> {
     // u.scene.z floods the field during a transition, so the dissolve has a
     // dense front to wipe with rather than the beads' thin trails.
     let flood = 1.0 + u.scene.z * 14.0;
-    let boost = mix(1.0, EMIT_BOOST, smoothstep(0.15, 0.85, u.scene.x));
+    // Bleeding out: the body puts everything it has into the water.
+    let boost = mix(1.0, EMIT_BOOST, smoothstep(0.15, 0.85, u.scene.x))
+        * (1.0 + u.collapse.y * BLEED_EMISSION);
     let amount =
         exp(-squared) * in.weight * EMISSION * flood * boost * u.scene.w * u.frame.x;
     return vec4<f32>(amount, 0.0, 0.0, 0.0);

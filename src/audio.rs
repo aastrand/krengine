@@ -413,11 +413,17 @@ impl Music {
             _stream: stream,
             state,
             sample_rate: sample_rate as f32,
-            beat_phase: 0.0,
+            // Started where the skip lands, or the timeline would run from
+            // zero while the tune ran from the skip: every scene change is
+            // keyed on beats, so they would all fire at the wrong time.
+            beat_phase: skip * module.default_bpm as f32 / 60.0,
             beat: 0.0,
             pulse: 0.0,
             epoch,
-            last_time: 0.0,
+            // Also the skip: the first frame measures elapsed time against
+            // this, and starting from zero counted the whole skip a second
+            // time.
+            last_time: skip,
             offset: 0.0,
             skip,
             locked: false,

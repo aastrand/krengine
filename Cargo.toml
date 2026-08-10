@@ -17,3 +17,6 @@ wgpu = "30.0.0"
 winit = "0.30.13"
 xmrs = "0.15.2"
 xmrsplayer = "0.15.0"
+
+[dev-dependencies]
+naga = { version = "30.0.0", features = ["wgsl-in"] }

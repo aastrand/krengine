@@ -18,10 +18,18 @@ use crate::passes::text::TextPass;
 use crate::passes::{
     DEPTH_FORMAT, HDR_FORMAT, particles::ParticlePass, post::PostPass, scene::ScenePass,
 };
-use crate::timeline::{Camera, Director, Spin, Stage};
+use crate::timeline::{Camera, Director, Flow, Spin, Stage};
 
-/// The intro cards, in order.
-const CARDS: [&str; 3] = ["smeuch", "is back", "2026"];
+/// Every card, in the order the timeline indexes them: the three intro
+/// titles, then the credits that run under the ferrofluid.
+const CARDS: [&str; 6] = [
+    "smeuch",
+    "is back",
+    "2026",
+    "code: kranken",
+    "ideas: spinax",
+    "dagspress: whodini",
+];
 
 /// Supersampling factor. The scene renders at this multiple of the window and
 /// the post pass filters it down — with a linear sampler, 2x is an exact 2x2
@@ -29,6 +37,11 @@ const CARDS: [&str; 3] = ["smeuch", "is back", "2026"];
 const RENDER_SCALE: u32 = 2;
 
 pub const PARTICLE_COUNT: u32 = 512;
+/// Beads in the fractal scene's string. Enough, at the spacing in common.wgsl,
+/// to cover about three quarters of the corridor — so the string reads as a
+/// continuous line with a head and a tail, rather than as a loop with no ends
+/// or a scatter of separate dots.
+const FRACTAL_BEADS: u32 = 320;
 
 /// Mirrors `Uniforms` in shaders/common.wgsl. Keep the field order in sync.
 #[repr(C)]
@@ -54,6 +67,13 @@ struct Uniforms {
     scene: [f32; 4],
     /// (merge, yaw, tilt, unused).
     motion: [f32; 4],
+    /// (collapse, unused, unused, unused).
+    collapse: [f32; 4],
+    /// The traced corridor the bead string runs along, as world positions.
+    track: [[f32; 4]; crate::fractal::TRACKS * crate::fractal::TRACK_POINTS],
+    /// A perpendicular at each of those points, carried along the curve, for
+    /// the curl to wind around.
+    track_frame: [[f32; 4]; crate::fractal::TRACKS * crate::fractal::TRACK_POINTS],
 }
 
 /// Offscreen render targets, rebuilt whenever the window resizes.
@@ -122,6 +142,7 @@ pub struct Renderer {
     pub show_bands: bool,
     director: Director,
     spin: Spin,
+    flow: Flow,
 }
 
 impl Renderer {
@@ -198,6 +219,7 @@ impl Renderer {
             show_bands: false,
             director: Director::default(),
             spin: Spin::default(),
+            flow: Flow::default(),
         }
     }
 
@@ -213,13 +235,22 @@ impl Renderer {
         self.hdr_bind_group = self.post.make_bind_group(&gpu.device, &self.targets.hdr);
     }
 
+    // Every one of these is a distinct thing the frame needs; bundling them
+    // into a struct would only move the list somewhere else.
+    #[allow(clippy::too_many_arguments)]
     fn uniforms(
         gpu: &Gpu,
         music: &Sync,
         show_bands: bool,
         stage: &Stage,
         shot: &Camera,
+        beads: u32,
+        track: [[f32; 4]; crate::fractal::TRACKS * crate::fractal::TRACK_POINTS],
+        track_frame: [[f32; 4]; crate::fractal::TRACKS * crate::fractal::TRACK_POINTS],
         spin: &Spin,
+        flow: f32,
+        along: f32,
+        radius: f32,
     ) -> Uniforms {
         let time = music.time;
         let eye = shot.eye;
@@ -242,7 +273,7 @@ impl Renderer {
             camera_up: Vec4::from((up, 0.0)).to_array(),
             resolution: [gpu.config.width as f32, gpu.config.height as f32],
             time,
-            particle_count: PARTICLE_COUNT as f32,
+            particle_count: beads as f32,
             audio: [music.low, music.mid, music.high, music.beat],
             music: [
                 music.row as f32,
@@ -251,7 +282,18 @@ impl Renderer {
                 music.bar_phase,
             ],
             bands: bytemuck::cast(music.bands),
-            debug: [if show_bands { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
+            debug: [
+                if show_bands { 1.0 } else { 0.0 },
+                // KR_BEADTEST parks the beads in front of the camera, to tell
+                // "the pass is not drawing" from "the positions are wrong".
+                if std::env::var("KR_BEADTEST").is_ok() {
+                    1.0
+                } else {
+                    0.0
+                },
+                0.0,
+                0.0,
+            ],
             // Clamped: a long stall must not blow the simulation up.
             intro: [
                 stage.card as f32,
@@ -259,18 +301,55 @@ impl Renderer {
                 stage.scene,
                 stage.scroll,
             ],
-            card: [stage.scale, stage.card_progress, 0.0, 0.0],
+            card: [
+                stage.scale,
+                stage.card_progress,
+                stage.card_offset[0],
+                stage.card_offset[1],
+            ],
             scene: [stage.spike, stage.dissolve, stage.burst, stage.smoke],
-            motion: [stage.merge, spin.yaw, spin.tilt, 0.0],
-            frame: [music.dt.min(1.0 / 30.0), 0.0, 0.0, 0.0],
+            collapse: [stage.collapse, stage.bleed, along, radius],
+            track,
+            track_frame,
+            motion: [stage.merge, spin.yaw, spin.tilt, stage.palette],
+            frame: [music.dt.min(1.0 / 30.0), 0.0, flow, 0.0],
         }
     }
 
     pub fn render(&mut self, gpu: &Gpu, music: &Sync) -> Frame {
         let stage = Stage::at(music);
-        let shot = self.director.update(music);
+
+        let beads = if stage.collapse > 0.85 {
+            FRACTAL_BEADS
+        } else {
+            PARTICLE_COUNT
+        };
+        let shot = self.director.update(music, &stage);
+
+        let mut track = [[0.0f32; 4]; crate::fractal::TRACKS * crate::fractal::TRACK_POINTS];
+        let mut track_frame = [[0.0f32; 4]; crate::fractal::TRACKS * crate::fractal::TRACK_POINTS];
+        let corridor = &self.director.corridor;
+        for (i, (slot, frame)) in track.iter_mut().zip(track_frame.iter_mut()).enumerate() {
+            let (point, normal) = (corridor.points[i], corridor.normals[i]);
+            *slot = [point.x, point.y, point.z, 0.0];
+            *frame = [normal.x, normal.y, normal.z, 0.0];
+        }
         let spin = self.spin.update(music, &stage);
-        let uniforms = Self::uniforms(gpu, music, self.show_bands, &stage, &shot, spin);
+        let flow = self.flow.swell(music);
+        let uniforms = Self::uniforms(
+            gpu,
+            music,
+            self.show_bands,
+            &stage,
+            &shot,
+            beads,
+            track,
+            track_frame,
+            spin,
+            flow,
+            self.director.along,
+            self.director.radius,
+        );
         gpu.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
@@ -311,13 +390,13 @@ impl Renderer {
         );
         // The beads fade out as the ferrofluid takes over; once they are gone
         // there is no reason to keep drawing them.
-        if stage.spike < 0.99 {
+        if stage.spike < 0.99 || stage.collapse > 0.85 {
             self.particles.draw(
                 &mut encoder,
                 &self.targets.hdr,
                 &self.targets.depth,
                 &self.uniform_bind_group,
-                PARTICLE_COUNT,
+                beads,
             );
         }
         if fluid_visible {

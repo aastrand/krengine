@@ -992,6 +992,7 @@ dependencies = [
  "fontdue",
  "glam",
  "log",
+ "naga",
  "pollster",
  "rustfft",
  "wgpu",
