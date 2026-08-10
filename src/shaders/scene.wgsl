@@ -88,6 +88,39 @@ fn march_inner(ro: vec3<f32>, rd: vec3<f32>, t_min: f32, t_max: f32) -> f32 {
     return -1.0;
 }
 
+// Cone-traced ambient occlusion: step out along the normal and compare how far
+// the field says we are from the surface against how far we actually moved.
+// Where a crevice closes in, the field lags behind and the gap is the occlusion.
+fn blob_ao(p: vec3<f32>, n: vec3<f32>) -> f32 {
+    var occlusion = 0.0;
+    var weight = 1.0;
+    for (var i = 0; i < 5; i = i + 1) {
+        let step = 0.02 + 0.11 * f32(i);
+        occlusion = occlusion + (step - inner_sdf(p + n * step)) * weight;
+        weight = weight * 0.72;
+    }
+    return clamp(1.0 - 2.2 * occlusion, 0.0, 1.0);
+}
+
+// Soft shadow by marching toward the light: the closest the ray passes to the
+// surface, relative to how far it has travelled, gives the penumbra for free.
+fn blob_shadow(p: vec3<f32>, light: vec3<f32>) -> f32 {
+    var result = 1.0;
+    var t = 0.04;
+    for (var i = 0; i < 28; i = i + 1) {
+        let d = inner_sdf(p + light * t);
+        if d < 0.001 {
+            return 0.0;
+        }
+        result = min(result, 10.0 * d / t);
+        t = t + clamp(d, 0.02, 0.25);
+        if t > 2.5 {
+            break;
+        }
+    }
+    return clamp(result, 0.0, 1.0);
+}
+
 // Liquid metal: almost pure reflection, tinted, with the merge seams running
 // hotter — that's what sells it as a fluid rather than a chrome solid.
 fn shade_inner(p: vec3<f32>, rd: vec3<f32>) -> vec3<f32> {
@@ -107,15 +140,25 @@ fn shade_inner(p: vec3<f32>, rd: vec3<f32>) -> vec3<f32> {
     let tint = mix(steel, VEIN_CORE, seam * 0.9);
 
     // Seams glow a little on their own, brightest as the necks pinch.
-    let glow = VEIN_COLOR * pow(seam, 2.0) * (0.5 + u.audio.w * 0.7);
+    let glow = VEIN_COLOR * pow(seam, 2.5) * (0.25 + u.audio.w * 0.45);
 
-    let spec = pow(max(dot(refl_dir, l), 0.0), 220.0) * 5.0;
-    let sheen = pow(max(dot(n, l), 0.0), 2.0) * 0.12;
+    // Contact shading. Without these the blob reads as pasted onto the room:
+    // occlusion darkens the crevices between merging lobes, and the shadow term
+    // stops lobes from being lit through one another.
+    let ao = blob_ao(p, n);
+    let shadow = blob_shadow(p, l);
+
+    let spec = pow(max(dot(refl_dir, l), 0.0), 220.0) * 5.0 * shadow;
+    let sheen = pow(max(dot(n, l), 0.0), 2.0) * 0.12 * shadow;
 
     // Seams also darken slightly at their deepest point, like a meniscus.
     let meniscus = 1.0 - seam * 0.25;
 
-    return (refl * fres * tint * meniscus) + vec3<f32>(1.0, 0.94, 0.86) * spec + tint * sheen + glow;
+    // Reflections are only partly occluded — a mirror in a corner still shows
+    // the room, just less of it.
+    let reflected = refl * fres * tint * meniscus * mix(1.0, ao, 0.6);
+
+    return reflected + vec3<f32>(1.0, 0.94, 0.86) * spec + tint * sheen + glow * ao;
 }
 
 @vertex

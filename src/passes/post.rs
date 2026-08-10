@@ -11,6 +11,7 @@ impl PostPass {
     pub fn new(
         device: &wgpu::Device,
         uniform_layout: &wgpu::BindGroupLayout,
+        bloom_layout: &wgpu::BindGroupLayout,
         output_format: wgpu::TextureFormat,
     ) -> Self {
         let module = shader::module(device, "post.wgsl", include_str!("../shaders/post.wgsl"));
@@ -46,7 +47,7 @@ impl PostPass {
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("post layout"),
-            bind_group_layouts: &[Some(uniform_layout), Some(&hdr_layout)],
+            bind_group_layouts: &[Some(uniform_layout), Some(&hdr_layout), Some(bloom_layout)],
             immediate_size: 0,
         });
 
@@ -102,6 +103,7 @@ impl PostPass {
         target: &wgpu::TextureView,
         uniforms: &wgpu::BindGroup,
         hdr: &wgpu::BindGroup,
+        bloom: &wgpu::BindGroup,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("post pass"),
@@ -122,6 +124,7 @@ impl PostPass {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, uniforms, &[]);
         pass.set_bind_group(1, hdr, &[]);
+        pass.set_bind_group(2, bloom, &[]);
         pass.draw(0..3, 0..1);
     }
 }

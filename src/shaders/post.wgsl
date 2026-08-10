@@ -3,6 +3,15 @@
 
 @group(1) @binding(0) var hdr_tex: texture_2d<f32>;
 @group(1) @binding(1) var hdr_sampler: sampler;
+@group(2) @binding(0) var bloom_tex: texture_2d<f32>;
+@group(2) @binding(1) var bloom_sampler: sampler;
+
+/// How much of the blurred highlights to mix back in.
+const BLOOM_STRENGTH: f32 = 0.55;
+
+/// Vignette: where the darkening starts and how deep it goes.
+const VIGNETTE_START: f32 = 0.45;
+const VIGNETTE_STRENGTH: f32 = 0.85;
 
 // Narkowicz ACES approximation.
 fn tonemap(x: vec3<f32>) -> vec3<f32> {
@@ -76,13 +85,27 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> FullscreenOut {
 @fragment
 fn fs_main(in: FullscreenOut) -> @location(0) vec4<f32> {
     let uv = in.uv * vec2<f32>(0.5, -0.5) + 0.5;
+
+    // The scene target is supersampled, so a single linear tap here averages
+    // the extra samples — that's the anti-aliasing.
     var color = textureSample(hdr_tex, hdr_sampler, uv).rgb;
+
+    // Bloom is added before tonemapping, so highlights roll off together with
+    // everything else rather than clipping to white.
+    color += textureSample(bloom_tex, bloom_sampler, uv).rgb * BLOOM_STRENGTH;
 
     color = tonemap(color * 1.15);
 
-    // Vignette, then a touch of grain to break up the gradients.
-    let v = 1.0 - 0.35 * dot(in.uv, in.uv);
-    color = color * v;
+    // Vignette, corrected for aspect so it stays circular on a wide window.
+    let aspect = u.resolution.x / max(u.resolution.y, 1.0);
+    let centered = vec2<f32>(in.uv.x * aspect, in.uv.y) / aspect;
+    let falloff = smoothstep(VIGNETTE_START, 1.15, length(centered));
+    color *= 1.0 - falloff * VIGNETTE_STRENGTH;
+
+    // Edges also lose a little saturation, which reads as depth rather than
+    // as a dark ring drawn over the image.
+    let grey = dot(color, vec3<f32>(0.299, 0.587, 0.114));
+    color = mix(color, vec3<f32>(grey), falloff * 0.35);
 
     let grain = fract(sin(dot(in.pos.xy + u.time, vec2<f32>(12.9898, 78.233))) * 43758.5453);
     color = color + (grain - 0.5) * 0.012;

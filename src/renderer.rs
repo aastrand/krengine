@@ -12,7 +12,15 @@ pub enum Frame {
 
 use crate::gpu::Gpu;
 use crate::audio::Sync;
-use crate::passes::{DEPTH_FORMAT, HDR_FORMAT, particles::ParticlePass, post::PostPass, scene::ScenePass};
+use crate::passes::bloom::{BloomPass, BloomTargets};
+use crate::passes::{
+    DEPTH_FORMAT, HDR_FORMAT, particles::ParticlePass, post::PostPass, scene::ScenePass,
+};
+
+/// Supersampling factor. The scene renders at this multiple of the window and
+/// the post pass filters it down — with a linear sampler, 2x is an exact 2x2
+/// box per output pixel. Simple, and no ghosting the way reprojection has.
+const RENDER_SCALE: u32 = 2;
 
 pub const PARTICLE_COUNT: u32 = 512;
 
@@ -42,7 +50,11 @@ struct Targets {
 }
 
 impl Targets {
+    /// Note the scene is allocated supersampled; bloom and the swapchain are
+    /// not.
     fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+        let width = width * RENDER_SCALE;
+        let height = height * RENDER_SCALE;
         let make = |label, format, usage| {
             device
                 .create_texture(&wgpu::TextureDescriptor {
@@ -83,9 +95,11 @@ pub struct Renderer {
 
     scene: ScenePass,
     particles: ParticlePass,
+    bloom: BloomPass,
     post: PostPass,
 
     targets: Targets,
+    bloom_targets: BloomTargets,
     hdr_bind_group: wgpu::BindGroup,
     /// Draws the spectrum as bars over the frame, for picking a band by eye.
     pub show_bands: bool,
@@ -127,9 +141,17 @@ impl Renderer {
 
         let scene = ScenePass::new(device, &uniform_layout);
         let particles = ParticlePass::new(device, &uniform_layout);
-        let post = PostPass::new(device, &uniform_layout, gpu.config.format);
+        let bloom = BloomPass::new(device, &uniform_layout);
+        let post = PostPass::new(
+            device,
+            &uniform_layout,
+            bloom.texture_layout(),
+            gpu.config.format,
+        );
 
         let targets = Targets::new(device, gpu.config.width, gpu.config.height);
+        let bloom_targets =
+            bloom.targets(device, &targets.hdr, gpu.config.width, gpu.config.height);
         let hdr_bind_group = post.make_bind_group(device, &targets.hdr);
 
         Self {
@@ -137,8 +159,10 @@ impl Renderer {
             uniform_bind_group,
             scene,
             particles,
+            bloom,
             post,
             targets,
+            bloom_targets,
             hdr_bind_group,
             show_bands: false,
         }
@@ -146,6 +170,12 @@ impl Renderer {
 
     pub fn resize(&mut self, gpu: &Gpu) {
         self.targets = Targets::new(&gpu.device, gpu.config.width, gpu.config.height);
+        self.bloom_targets = self.bloom.targets(
+            &gpu.device,
+            &self.targets.hdr,
+            gpu.config.width,
+            gpu.config.height,
+        );
         self.hdr_bind_group = self.post.make_bind_group(&gpu.device, &self.targets.hdr);
     }
 
@@ -229,11 +259,14 @@ impl Renderer {
             &self.uniform_bind_group,
             PARTICLE_COUNT,
         );
+        self.bloom
+            .draw(&mut encoder, &self.bloom_targets, &self.uniform_bind_group);
         self.post.draw(
             &mut encoder,
             &view,
             &self.uniform_bind_group,
             &self.hdr_bind_group,
+            self.bloom_targets.result(),
         );
 
         gpu.queue.submit(Some(encoder.finish()));

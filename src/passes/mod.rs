@@ -1,3 +1,4 @@
+pub mod bloom;
 pub mod particles;
 pub mod post;
 pub mod scene;

@@ -103,10 +103,8 @@ impl ApplicationHandler for App {
                 // How evenly does the demo clock advance compared to real time?
                 // 1.0 means perfectly smooth; spread here is visible judder.
                 // Enable with KR_DEBUG=1.
-                if state.debug && dt > 0.0 && state.prev_music_time > 0.0 {
-                    state
-                        .frame_times
-                        .push((music.time - state.prev_music_time) / dt);
+                if state.debug && dt > 0.0 {
+                    state.frame_times.push(dt * 1000.0);
                 }
                 state.prev_music_time = music.time;
 
@@ -115,8 +113,9 @@ impl ApplicationHandler for App {
                     sorted.sort_by(f32::total_cmp);
                     let at = |q: f32| sorted[(sorted.len() as f32 * q) as usize % sorted.len()];
                     log::info!(
-                        "clock rate: p5 {:.2}  p50 {:.2}  p95 {:.2}  | latency {:.0} ms",
-                        at(0.05), at(0.5), at(0.95), music.output_latency * 1000.0
+                        "frame ms: p50 {:.1}  p95 {:.1}  max {:.1}  ({:.0} fps, audio latency {:.0} ms)",
+                        at(0.5), at(0.95), at(0.999), 1000.0 / at(0.5),
+                        music.output_latency * 1000.0
                     );
                 }
                 if let Frame::Reconfigure = state.renderer.render(&state.gpu, &music) {

@@ -254,8 +254,12 @@ const VEIN_COLOR: vec3<f32> = vec3<f32>(1.0, 0.26, 0.03);
 /// Hotter core, so the thinnest filaments read white-hot rather than flat.
 const VEIN_CORE: vec3<f32> = vec3<f32>(1.0, 0.72, 0.35);
 /// Raise to widen the veins, lower to make them rarer and finer.
-const VEIN_THRESHOLD: f32 = 0.82;
-const VEIN_INTENSITY: f32 = 2.6;
+const VEIN_THRESHOLD: f32 = 0.87;
+const VEIN_INTENSITY: f32 = 0.9;
+/// Direction the pulses of energy travel through the vein network.
+const VEIN_FLOW_DIR: vec3<f32> = vec3<f32>(0.35, 1.0, 0.2);
+/// Surges per beat. Fractions give a surge every N beats.
+const VEIN_SURGES_PER_BEAT: f32 = 0.5;
 
 // Height field on the shell's surface. Domain-warped by time, which is what
 // makes the walls look like they're slowly morphing.
@@ -323,10 +327,26 @@ fn environment(rd: vec3<f32>) -> vec3<f32> {
     let ridge = 1.0 - abs(h * 2.0 - 1.0);
     let vein = pow(smoothstep(VEIN_THRESHOLD, 1.0, ridge), 2.5);
 
-    // Deep orange body with a hotter core, pushed well above 1.0 so it reads as
-    // emissive through the tonemap — and so bloom has something to catch later.
+    // Energy travelling through the network. The phase runs on beats rather
+    // than seconds, so surges arrive with the music instead of drifting past it.
+    let beats = u.music.z;
+    let sweep = dot(dir, normalize(VEIN_FLOW_DIR)) * 5.0 - beats * PI * 2.0 * VEIN_SURGES_PER_BEAT;
+    let flow = 0.35 + 0.65 * pow(0.5 + 0.5 * sin(sweep), 3.0);
+
+    // The network is also a spectrum: veins low in the room answer to the bass,
+    // veins overhead to the hats, so different parts light with different parts
+    // of the mix.
+    let band_index = u32(clamp((dir.y * 0.5 + 0.5) * 16.0, 0.0, 15.0));
+    let energy = 0.3 + 1.3 * band(band_index);
+
+    // Fine flicker keyed off the height field, so neighbouring filaments don't
+    // breathe in lockstep.
+    let flicker = 0.85 + 0.15 * sin(h * 28.0 + beats * 3.0);
+
+    // Deep orange body with a hotter core, kept above 1.0 in the brightest
+    // filaments so they still read as emissive through the tonemap.
     let heat = VEIN_COLOR * vein + VEIN_CORE * pow(vein, 4.0);
-    color = color + heat * VEIN_INTENSITY * (0.75 + u.audio.w * 0.9);
+    color = color + heat * VEIN_INTENSITY * flow * flicker * energy * (0.8 + u.audio.w * 0.7);
 
     return color;
 }

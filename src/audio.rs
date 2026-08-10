@@ -37,6 +37,14 @@ const RESYNC_THRESHOLD: f32 = 0.25;
 /// re-pick these by eye.
 const ONSET_BANDS: std::ops::Range<usize> = 0..4;
 
+/// How hard an on-beat onset drags the beat phase into alignment. The phase
+/// runs at the tune's tempo but starts arbitrary, so it needs pulling onto the
+/// music; too high and syncopation yanks it around.
+const PHASE_LOCK_GAIN: f32 = 0.3;
+/// Only onsets this close to a beat boundary are treated as being *on* the
+/// beat. Anything further off is syncopation and must not move the phase.
+const PHASE_LOCK_WINDOW: f32 = 0.25;
+
 /// How fast the beat pulse swells. Not instant: a step change in a value that
 /// drives geometry reads as a pop rather than a hit.
 const PULSE_ATTACK: f32 = 0.055;
@@ -481,6 +489,14 @@ impl Music {
         self.pulse *= (-dt / PULSE_DECAY).exp();
         if self.onset.update(peak(ONSET_BANDS), dt) {
             self.pulse = 1.0;
+
+            // Phase-lock: ease the beat grid toward this hit when the hit is
+            // near a beat line. Over a few bars the phase settles onto the
+            // music instead of wherever the program happened to start.
+            let nearest = self.beat_phase.round();
+            if (self.beat_phase - nearest).abs() < PHASE_LOCK_WINDOW {
+                self.beat_phase += (nearest - self.beat_phase) * PHASE_LOCK_GAIN;
+            }
             if self.debug {
                 log::info!(
                     "onset at {time:.2}s  (+{:.3}s since last, low {low:.2})",
