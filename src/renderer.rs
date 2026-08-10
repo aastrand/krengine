@@ -13,6 +13,7 @@ pub enum Frame {
 use crate::gpu::Gpu;
 use crate::audio::Sync;
 use crate::passes::bloom::{BloomPass, BloomTargets};
+use crate::passes::smoke::SmokePass;
 use crate::passes::{
     DEPTH_FORMAT, HDR_FORMAT, particles::ParticlePass, post::PostPass, scene::ScenePass,
 };
@@ -94,6 +95,7 @@ pub struct Renderer {
     uniform_bind_group: wgpu::BindGroup,
 
     scene: ScenePass,
+    smoke: SmokePass,
     particles: ParticlePass,
     bloom: BloomPass,
     post: PostPass,
@@ -140,6 +142,7 @@ impl Renderer {
         });
 
         let scene = ScenePass::new(device, &uniform_layout);
+        let smoke = SmokePass::new(device, &uniform_layout);
         let particles = ParticlePass::new(device, &uniform_layout);
         let bloom = BloomPass::new(device, &uniform_layout);
         let post = PostPass::new(
@@ -158,6 +161,7 @@ impl Renderer {
             uniform_buf,
             uniform_bind_group,
             scene,
+            smoke,
             particles,
             bloom,
             post,
@@ -251,6 +255,13 @@ impl Renderer {
             &self.targets.hdr,
             &self.targets.depth,
             &self.uniform_bind_group,
+        );
+        self.smoke.draw(
+            &mut encoder,
+            &self.targets.hdr,
+            &self.targets.depth,
+            &self.uniform_bind_group,
+            PARTICLE_COUNT,
         );
         self.particles.draw(
             &mut encoder,

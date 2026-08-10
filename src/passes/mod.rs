@@ -2,6 +2,7 @@ pub mod bloom;
 pub mod particles;
 pub mod post;
 pub mod scene;
+pub mod smoke;
 
 /// HDR target the scene and particles accumulate into.
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
