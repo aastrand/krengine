@@ -59,6 +59,13 @@ const ONSET_FLOOR: f32 = 0.012;
 /// suppresses the ringing of a single kick.
 const ONSET_COOLDOWN: f32 = 0.12;
 
+/// The accent detector is deliberately fussier than the beat detector: it
+/// watches the whole spectrum and demands a much bigger jump, so it fires on
+/// the hits an arrangement actually lands on rather than on every kick.
+const ACCENT_SENSITIVITY: f32 = 3.4;
+const ACCENT_FLOOR: f32 = 0.05;
+const ACCENT_COOLDOWN: f32 = 0.4;
+
 /// Number of log-spaced spectrum bands handed to the shaders.
 pub const BAND_COUNT: usize = 16;
 const BAND_MIN_HZ: f32 = 40.0;
@@ -89,6 +96,9 @@ pub struct Sync {
     pub bar_phase: f32,
     pub row: u32,
     pub pattern: u32,
+    /// True on the frame a hard transient lands — a peak across the whole
+    /// spectrum, not just the bass. Cuts hang off this.
+    pub hard_hit: bool,
     /// Backend-reported output latency, already applied to `time`.
     pub output_latency: f32,
     /// Seconds since the previous frame.
@@ -271,14 +281,24 @@ struct OnsetDetector {
 impl OnsetDetector {
     /// `level` is the current bass energy. Returns true on an attack.
     fn update(&mut self, level: f32, dt: f32) -> bool {
+        self.update_with(level, dt, ONSET_SENSITIVITY, ONSET_FLOOR, ONSET_COOLDOWN)
+    }
+
+    fn update_with(
+        &mut self,
+        level: f32,
+        dt: f32,
+        sensitivity: f32,
+        floor: f32,
+        cooldown: f32,
+    ) -> bool {
         self.cooldown = (self.cooldown - dt).max(0.0);
 
         // Spectral flux: rises only. A decaying tail is not a new hit.
         let flux = (level - self.previous).max(0.0);
         self.previous = level;
 
-        let hit =
-            flux > self.average_flux * ONSET_SENSITIVITY + ONSET_FLOOR && self.cooldown <= 0.0;
+        let hit = flux > self.average_flux * sensitivity + floor && self.cooldown <= 0.0;
 
         // Track the average *after* testing, so a hit doesn't raise the bar it
         // just cleared. Slow, so it follows the mix rather than single notes.
@@ -286,7 +306,7 @@ impl OnsetDetector {
         self.average_flux += (flux - self.average_flux) * alpha;
 
         if hit {
-            self.cooldown = ONSET_COOLDOWN;
+            self.cooldown = cooldown;
         }
         hit
     }
@@ -327,6 +347,7 @@ pub struct Music {
     locked: bool,
     spectrum: Spectrum,
     onset: OnsetDetector,
+    accent: OnsetDetector,
     debug: bool,
     last_onset: f32,
 }
@@ -389,6 +410,7 @@ impl Music {
             locked: false,
             spectrum: Spectrum::new(sample_rate as f32),
             onset: OnsetDetector::default(),
+            accent: OnsetDetector::default(),
             debug: std::env::var("KR_DEBUG").is_ok(),
             last_onset: 0.0,
         })
@@ -509,8 +531,15 @@ impl Music {
         }
         self.beat += (self.pulse - self.beat) * (1.0 - (-dt / PULSE_ATTACK).exp());
 
+        // Whole-spectrum peak: the accents a cut should land on.
+        let full = bands.iter().copied().fold(0.0f32, f32::max);
+        let hard_hit = self
+            .accent
+            .update_with(full, dt, ACCENT_SENSITIVITY, ACCENT_FLOOR, ACCENT_COOLDOWN);
+
         Sync {
             time,
+            hard_hit,
             beat_phase: self.beat_phase,
             bar_phase: (self.beat_phase * 0.25).fract(),
             bands,

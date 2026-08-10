@@ -42,15 +42,19 @@ const QUAD: array<vec2<f32>, 6> = array<vec2<f32>, 6>(
 /// polished type does when it turns. A broad sweep provides the movement and a
 /// fine sparkle rides on top of it, both keyed to the music.
 fn shimmer(p: vec2<f32>) -> f32 {
-    // The sweep runs along the text and is narrow, so it reads as a highlight
-    // passing over rather than the whole word brightening.
-    let travel = fract(u.time * SHEEN_SPEED) * 4.0 - 2.0;
+    // One pass per card, not a repeating loop: the highlight crosses the word
+    // once while the card is up. u.card.y is how far through its life it is.
+    let travel = mix(-1.8, 2.4, smoothstep(0.05, 0.75, u.card.y));
     let across = p.x * 0.55 + p.y * 0.35;
     let sweep = exp(-pow((across - travel) * SHEEN_WIDTH, 2.0));
 
     // Fine grain that twinkles with the top of the mix.
     let grain = vnoise(vec3<f32>(p * 9.0, u.time * 0.7));
-    let sparkle = pow(smoothstep(0.62, 1.0, grain), 3.0) * (0.35 + band(12u) * 2.2);
+    // Sparkle rides the sweep rather than running the whole time, so the
+    // letters twinkle as the glint passes and are still otherwise.
+    let sparkle = pow(smoothstep(0.62, 1.0, grain), 3.0)
+        * (0.35 + band(12u) * 2.2)
+        * (0.15 + sweep * 1.6);
 
     // Body brightness follows the mids, so the word breathes with the music.
     let body = 0.35 + band(7u) * 0.8;

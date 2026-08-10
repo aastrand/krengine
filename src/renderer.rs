@@ -12,7 +12,7 @@ pub enum Frame {
 
 use crate::gpu::Gpu;
 use crate::audio::Sync;
-use crate::timeline::Stage;
+use crate::timeline::{Camera, Director, Stage};
 use crate::passes::bloom::{BloomPass, BloomTargets};
 use crate::passes::fluid::FluidPass;
 use crate::passes::text::TextPass;
@@ -115,6 +115,7 @@ pub struct Renderer {
     hdr_bind_group: wgpu::BindGroup,
     /// Draws the spectrum as bars over the frame, for picking a band by eye.
     pub show_bands: bool,
+    director: Director,
 }
 
 impl Renderer {
@@ -184,6 +185,7 @@ impl Renderer {
             bloom_targets,
             hdr_bind_group,
             show_bands: false,
+            director: Director::default(),
         }
     }
 
@@ -199,21 +201,20 @@ impl Renderer {
         self.hdr_bind_group = self.post.make_bind_group(&gpu.device, &self.targets.hdr);
     }
 
-    fn uniforms(gpu: &Gpu, music: &Sync, show_bands: bool, stage: &Stage) -> Uniforms {
+    fn uniforms(
+        gpu: &Gpu,
+        music: &Sync,
+        show_bands: bool,
+        stage: &Stage,
+        shot: &Camera,
+    ) -> Uniforms {
         let time = music.time;
-        // Slow orbit with a gentle rise and fall — no input needed, it's a demo.
-        // Beats nudge the camera back a touch, so hits register even in a wide.
-        let radius = 3.1 + (time * 0.23).sin() * 0.35 + music.beat * 0.12;
-        let eye = Vec3::new(
-            (time * 0.17).cos() * radius,
-            0.6 + (time * 0.31).sin() * 0.5,
-            (time * 0.17).sin() * radius,
-        );
+        let eye = shot.eye;
 
         let aspect = gpu.config.width as f32 / gpu.config.height as f32;
-        let view = view::look_at_mat4(eye, Vec3::ZERO, Vec3::Y);
+        let view = view::look_at_mat4(eye, shot.target, Vec3::Y);
         // directx variant maps depth to 0..1, which is what wgpu expects.
-        let proj = directx::perspective(60f32.to_radians(), aspect, 0.05, 100.0);
+        let proj = directx::perspective(shot.fov_degrees.to_radians(), aspect, 0.05, 100.0);
         let view_proj = proj * view;
 
         // Billboard basis: rows of the view matrix are the camera's axes.
@@ -245,14 +246,15 @@ impl Renderer {
                 stage.scene,
                 stage.scroll,
             ],
-            card: [stage.scale, 0.0, 0.0, 0.0],
+            card: [stage.scale, stage.card_progress, 0.0, 0.0],
             frame: [music.dt.min(1.0 / 30.0), 0.0, 0.0, 0.0],
         }
     }
 
     pub fn render(&mut self, gpu: &Gpu, music: &Sync) -> Frame {
         let stage = Stage::at(music);
-        let uniforms = Self::uniforms(gpu, music, self.show_bands, &stage);
+        let shot = self.director.update(music);
+        let uniforms = Self::uniforms(gpu, music, self.show_bands, &stage, &shot);
         gpu.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
