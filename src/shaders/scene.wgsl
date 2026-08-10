@@ -317,6 +317,11 @@ fn fs_main(in: FullscreenOut) -> SceneOut {
 
     // Only once the room has actually gone. Swapping at half way meant the
     // collapse was over before it could be seen.
+    //
+    // This threshold sits inside the white wash's plateau — see WASH_HOLD and
+    // WASH_BACK in timeline.rs, which bracket it — so the hard change from one
+    // geometry to the other happens on a frame that is solid white. Move it
+    // outside that window and the swap becomes a visible cut again.
     if u.collapse.x > 0.9 {
         let hit = march_fractal(ro, rd);
         if hit.x > 0.0 {

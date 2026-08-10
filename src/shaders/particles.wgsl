@@ -42,13 +42,15 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     let center = mix(particle_pos(ii, u.time), bead.xyz, fractal_scene);
 
     let fi = f32(ii);
-    // Bigger against the fractal, which is a much bigger object than the blob,
-    // but only enough that the beads touch at the string's spacing — larger and
-    // the string fuses into a solid tube with no beads left in it.
+    // Much bigger against the fractal. The structure fills the frame and the
+    // camera is metres from the strings, so beads at the blob's size came out
+    // as a few dark pixels — the string was there and could not be seen. At
+    // this size they are beads on a cord, close to as wide as the tunnels they
+    // thread.
     // The beat barely moves them in the fractal scene; nothing there is meant
     // to punch.
     let pulse = 1.0 + u.audio.w * mix(0.45, 0.06, fractal_scene);
-    let size = (0.018 + 0.022 * fract(fi * 0.31)) * pulse * mix(1.0, 1.5, fractal_scene);
+    let size = (0.018 + 0.022 * fract(fi * 0.31)) * pulse * mix(1.0, 4.0, fractal_scene);
     let world = center + (u.camera_right.xyz * corner.x + u.camera_up.xyz * corner.y) * size;
 
     var out: VsOut;
@@ -70,6 +72,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
 
     // Gone through the ferrofluid, back for the fractal.
-    let presence = max(1.0 - u.scene.x, in.scene) * in.visible;
+    //
+    // u.frame.w brings them up behind the white wash rather than at it: the
+    // strings belong to the fractal, and a string already threading a
+    // structure that has not appeared yet reads as the old scene sprouting
+    // something. In the fractal scene it is the whole of their presence; in
+    // the first scene it is not used, since in.scene is zero there.
+    let arrived = mix(1.0, u.frame.w, in.scene);
+    let presence = max(1.0 - u.scene.x, in.scene) * in.visible * arrived;
     return vec4<f32>(in.tint, smoothstep(1.0, 0.55, r) * 0.92 * u.intro.z * presence);
 }

@@ -52,6 +52,11 @@ const FRACTAL_PATH: [[f32; 3]; 6] = [
 ];
 /// Where along the path the first stand is. Later shots step on from here.
 const FRACTAL_STAND: f32 = 0.17;
+/// How many places on the path each shot tries before picking one, how far a
+/// probe looks, and how much open space is enough to score full marks.
+const STAND_CANDIDATES: usize = 12;
+const STAND_REACH: f32 = 9.0;
+const STAND_ENOUGH: f32 = 5.0;
 
 /// How far along the corridor the camera looks, as a fraction of its length,
 /// and how far that aim drifts either side of it. The drift is the whole of
@@ -62,16 +67,24 @@ const FRACTAL_STAND: f32 = 0.17;
 /// of the camera — where beads still read as beads. Aimed halfway along, the
 /// view points at something twelve units off and the near string, which is the
 /// part worth looking at, sits out at the edge of frame.
-const FRACTAL_AIM: f32 = 0.12;
-const FRACTAL_AIM_DRIFT: f32 = 0.06;
+const FRACTAL_AIM: f32 = 0.16;
+const FRACTAL_AIM_DRIFT: f32 = 0.085;
 /// Radians per second the aim sweeps back and forth along the corridor.
-const FRACTAL_PAN: f32 = 0.035;
+const FRACTAL_PAN: f32 = 0.11;
+/// How far the aim also leans across the strings, in world units. Without it
+/// the pan is confined to the one line the middle corridor traces.
+const FRACTAL_PAN_ACROSS: f32 = 0.9;
 
 /// Where the corridor starts relative to the camera: this far in front, and
 /// this far off to one side, so the string enters frame from the edge and
 /// recedes rather than flying straight at the lens.
-const FRACTAL_FOCUS: f32 = 1.9;
-const FRACTAL_OFFSET: f32 = 1.4;
+const FRACTAL_FOCUS: f32 = 1.8;
+const FRACTAL_OFFSET: f32 = 0.35;
+/// How wide the fractal scene shoots. Much wider than the rest of the demo:
+/// the camera is standing inside the structure with three strings spread
+/// across it, and at the 52 degrees the shot list uses, the outer two are
+/// outside the frame before they have gone anywhere.
+const FRACTAL_FOV: f32 = 76.0;
 
 /// Clearance the glide keeps from the structure, and how hard the resulting
 /// path is smoothed, in seconds. The clearance has to be something the
@@ -91,6 +104,20 @@ const FRACTAL_DIVE: f32 = 0.22;
 /// When the room contracts and takes the scene with it.
 const COLLAPSE_BEATS: f32 = MERGE_BEATS + 34.0;
 const COLLAPSE_RAMP: f32 = 12.0;
+
+/// How far into the collapse the scene changes over, as fractions of it.
+///
+/// The frame washes to white from WASH_IN, holds solid white from WASH_HOLD to
+/// WASH_BACK, then comes back by WASH_OUT. The geometry is swapped inside that
+/// hold — at 0.9, which is the threshold scene.wgsl switches on and must stay
+/// in step with these — so the one frame where the old scene becomes the
+/// fractal is a frame with nothing in it. A plateau rather than a single peak
+/// because the swap has to be covered at whatever moment the frame lands on,
+/// not only at the instant the curve happens to touch 1.
+const WASH_IN: f32 = 0.52;
+const WASH_HOLD: f32 = 0.86;
+const WASH_BACK: f32 = 0.94;
+const WASH_OUT: f32 = 1.0;
 
 /// How long the room takes to give up the warm accent — much slower than the
 /// body takes to claim it.
@@ -149,6 +176,12 @@ pub struct Stage {
     /// How far the room has collapsed, 0 to 1. Past 1 the shell has shrunk
     /// through the camera and there is nothing but white behind it.
     pub collapse: f32,
+    /// How white the frame is washed over the scene change: 0 either side, 1
+    /// at the moment the geometry is swapped.
+    pub wash: f32,
+    /// How far the fractal's bead strings have arrived, 0 to 1. Behind the
+    /// wash, so they appear with the scene they belong to.
+    pub beads: f32,
     /// The room's palette shift, on its own slower ramp than the body's. A
     /// background caught changing draws attention to itself; the point is that
     /// it has receded, not that it receded just now.
@@ -245,12 +278,27 @@ impl Stage {
         let clearing = 1.0 - smoothstep(COLLAPSE_BEATS - 12.0, COLLAPSE_BEATS - 5.0, beats);
         let smoke = (1.0 - spike).max(merge * OCTOPUS_SMOKE * clearing);
 
+        // The room going white over the change, and coming back on the far
+        // side. Full white exactly at SWAP, which is where scene.wgsl trades
+        // the old geometry for the fractal — so the swap itself lands in the
+        // one frame where nothing can be made out.
+        let wash = smoothstep(WASH_IN, WASH_HOLD, collapse)
+            .min(1.0 - smoothstep(WASH_BACK, WASH_OUT, collapse));
+
+        // The beads come up out of the white rather than being there when it
+        // clears. They belong to the new scene, so they arrive with it — a
+        // string already threading a structure that has not appeared yet reads
+        // as the old scene sprouting something.
+        let beads = smoothstep(WASH_BACK, WASH_OUT, collapse);
+
         Self {
             card,
             card_alpha,
             merge,
             palette,
             collapse,
+            wash,
+            beads,
             bleed,
             dive: smoothstep(COLLAPSE_BEATS, COLLAPSE_BEATS + 160.0, beats),
             smoke,
@@ -459,8 +507,8 @@ pub struct Director {
     /// because the glide updates first and would otherwise clear the flag
     /// before the trace ever saw it.
     traced_for: usize,
-    /// The corridor the bead string runs along, retraced on each cut.
-    pub corridor: crate::fractal::Corridor,
+    /// The corridors the bead strings run along, retraced on each cut.
+    pub bundle: [crate::fractal::Corridor; crate::fractal::STRINGS],
 }
 
 /// How much closer the second scene frames, and how far each of its shots
@@ -482,7 +530,7 @@ impl Default for Director {
             radius: FRACTAL_INSIDE,
             placed_for: usize::MAX,
             traced_for: usize::MAX,
-            corridor: crate::fractal::Corridor::default(),
+            bundle: std::array::from_fn(|_| crate::fractal::Corridor::default()),
         }
     }
 }
@@ -518,18 +566,42 @@ impl Director {
             //
             // It does move, but by cutting: each shot stands somewhere else on
             // the path, so a long scene is a series of held views rather than
-            // one. The offset is an irrational-ish step, so successive stands
-            // do not land near each other.
-            let along = (FRACTAL_STAND + self.shot as f32 * 0.137).rem_euclid(1.0);
+            // one.
+            //
+            // Which somewhere is chosen rather than stepped to. Walking the
+            // path by a fixed offset and clearing whatever it landed on is
+            // blind — nothing asks whether the resulting view has anywhere for
+            // the strings to run, so some shots opened on a wall a few
+            // centimetres away and some in the middle of a void with the
+            // architecture out of reach. That is what made the scene hit and
+            // miss from cut to cut.
+            //
+            // Safe to make a discrete pick here, unlike the per-frame
+            // correction: this is evaluated once per shot, and a shot begins
+            // with a cut, so the camera moving to a different candidate is the
+            // cut rather than a jump during one.
             let radius = FRACTAL_INSIDE
                 * (1.0 - stage.dive * FRACTAL_DIVE)
                 * (0.9 + (self.shot % 3) as f32 * 0.1);
-            let path = spline(&FRACTAL_PATH, along) * radius;
+
+            let mut best = (f32::MIN, 0.0, Vec3::ZERO);
+            for candidate in 0..STAND_CANDIDATES {
+                let along = (FRACTAL_STAND
+                    + (self.shot * STAND_CANDIDATES + candidate) as f32 * 0.137)
+                    .rem_euclid(1.0);
+                let stand = crate::fractal::push_clear(
+                    spline(&FRACTAL_PATH, along) * radius,
+                    FRACTAL_CLEARANCE,
+                );
+                let score = stand_score(stand, self.shot);
+                if score > best.0 {
+                    best = (score, along, stand);
+                }
+            }
+            let (_, along, corrected) = best;
 
             self.along = along;
             self.radius = radius;
-
-            let corrected = crate::fractal::push_clear(path, FRACTAL_CLEARANCE);
 
             // Even that moves in steps when the surface underneath changes, so
             // it is low-passed. The filter is on position, not velocity, so it
@@ -553,56 +625,46 @@ impl Director {
             // apart within seconds of every cut.
             //
             // A fixed facing per shot, so the trace does not move under the
-            // beads. Roughly towards the middle, turned a little per shot so
-            // successive stands do not look the same way.
-            let turn = self.shot as f32 * 1.31;
-            let facing = (Vec3::ZERO - self.glide).normalize_or_zero();
-            let forward = Vec3::new(
-                facing.x * turn.cos() - facing.z * turn.sin(),
-                facing.y,
-                facing.x * turn.sin() + facing.z * turn.cos(),
-            )
-            .normalize_or_zero();
+            // beads. The same one the stand was scored on, or the camera would
+            // be judged on a view it does not end up taking.
+            let forward = stand_forward(self.glide, self.shot);
             let across = forward.cross(Vec3::Y).normalize_or_zero();
             let above = across.cross(forward).normalize_or_zero();
-
-            // The corridor's heading: mostly away from the camera, angled
-            // across the frame so the line reads as travelling through the
-            // structure rather than as a dot coming towards the lens.
-            let heading = (forward + across * 0.55 - above * 0.18).normalize_or_zero();
+            let heading = string_heading(forward, across, above);
 
             // Started off to one side and in front, then cleared — a start
             // buried in the structure puts the head of the string inside a
             // wall, where every bead on it is culled.
-            let start = crate::fractal::push_clear(
+            let origin = crate::fractal::push_clear(
                 self.glide + forward * FRACTAL_FOCUS - across * FRACTAL_OFFSET,
                 FRACTAL_CLEARANCE,
             );
 
             // Traced once per shot, not per frame. The trace steers on the
             // distance field, so a slightly different start finds a slightly
-            // different route — retracing every frame redrew the corridor
+            // different route — retracing every frame redrew the corridors
             // underneath the beads, which is what had them blinking and
             // jumping about.
             if self.traced_for != self.shot {
                 self.traced_for = self.shot;
-                crate::fractal::trace_corridor(start, heading, &mut self.corridor);
+                crate::fractal::trace_bundle(origin, heading, across, above, &mut self.bundle);
 
                 if std::env::var("KR_DEBUG").is_ok() {
-                    let clear = self
-                        .corridor
-                        .points
-                        .iter()
-                        .filter(|point| {
-                            crate::fractal::distance(**point)
-                                > crate::fractal::TRACK_CLEARANCE * 0.5
-                        })
-                        .count();
-                    log::info!(
-                        "corridor: {clear}/{} points clear, start {:.2?}",
-                        crate::fractal::TRACK_POINTS,
-                        self.corridor.points[0],
-                    );
+                    for (i, corridor) in self.bundle.iter().enumerate() {
+                        let clear = corridor
+                            .points
+                            .iter()
+                            .filter(|point| {
+                                crate::fractal::distance(**point)
+                                    > crate::fractal::TRACK_CLEARANCE * 0.5
+                            })
+                            .count();
+                        log::info!(
+                            "string {i}: {clear}/{} points clear, start {:.2?}",
+                            crate::fractal::TRACK_POINTS,
+                            corridor.points[0],
+                        );
+                    }
                 }
             }
 
@@ -612,26 +674,92 @@ impl Director {
             // is used here.
             let arrival = smoothstep(0.85, 1.0, stage.collapse);
             camera.eye = camera.eye.lerp(inside, arrival);
+            camera.fov_degrees += (FRACTAL_FOV - camera.fov_degrees) * arrival;
 
-            // The view sits on the string and slides slowly along it. That is
+            // The view sits on the middle string and slides along it. That is
             // the only motion in the scene — the camera stands still — and
-            // because the aim is a point on the corridor itself, the string
-            // cannot leave the frame however the trace happened to route.
-            let sweep = FRACTAL_AIM + (music.time * FRACTAL_PAN).sin() * FRACTAL_AIM_DRIFT;
+            // because the aim is a point on a corridor itself, the strings
+            // cannot leave the frame however the traces happened to route.
+            //
+            // Two sweeps at different rates rather than one, so the pan does
+            // not visibly repeat: a single sine returns to the same framing on
+            // a fixed cycle, and over a long scene that reads as the camera
+            // going back and forth rather than looking around.
+            let sweep = FRACTAL_AIM
+                + (music.time * FRACTAL_PAN).sin() * FRACTAL_AIM_DRIFT
+                + (music.time * FRACTAL_PAN * 0.41).sin() * FRACTAL_AIM_DRIFT * 0.6;
             let aim = self.corridor_point(sweep);
-            camera.target = camera.target.lerp(aim, arrival);
+
+            // And a little across the strings as well as along them, so the
+            // pan is not confined to one line through the frame.
+            let lean = across * (music.time * FRACTAL_PAN * 0.63).sin() * FRACTAL_PAN_ACROSS;
+            camera.target = camera.target.lerp(aim + lean, arrival);
         }
         camera
     }
 
-    /// A point on the traced corridor, by fraction of its length.
+    /// Where the whole bundle is, at a fraction along its length: the mean of
+    /// the strings' corridors there.
+    ///
+    /// The middle string alone is not enough. The traces are steered by the
+    /// structure and diverge by however much the architecture demands, so the
+    /// middle one can end up at the edge of the group rather than in it —
+    /// holding it in frame then pushes the other two out. The centroid moves
+    /// with wherever the strings actually went.
     fn corridor_point(&self, t: f32) -> Vec3 {
         let last = crate::fractal::TRACK_POINTS - 1;
         let scaled = t.clamp(0.0, 1.0) * last as f32;
         let index = (scaled.floor() as usize).min(last - 1);
-        let points = &self.corridor.points;
-        points[index].lerp(points[index + 1], scaled.fract())
+        let f = scaled.fract();
+
+        let sum: Vec3 = self
+            .bundle
+            .iter()
+            .map(|c| c.points[index].lerp(c.points[index + 1], f))
+            .sum();
+        sum / crate::fractal::STRINGS as f32
     }
+}
+
+/// Which way the camera looks from a given stand: roughly towards the middle
+/// of the structure, turned a little per shot so successive stands do not all
+/// look the same way.
+fn stand_forward(stand: Vec3, shot: usize) -> Vec3 {
+    let turn = shot as f32 * 1.31;
+    let facing = (Vec3::ZERO - stand).normalize_or_zero();
+    Vec3::new(
+        facing.x * turn.cos() - facing.z * turn.sin(),
+        facing.y,
+        facing.x * turn.sin() + facing.z * turn.cos(),
+    )
+    .normalize_or_zero()
+}
+
+/// The strings' heading: mostly away from the camera, angled across the frame
+/// so a string reads as travelling through the structure rather than as a dot
+/// coming towards the lens.
+fn string_heading(forward: Vec3, across: Vec3, above: Vec3) -> Vec3 {
+    (forward + across * 0.55 - above * 0.18).normalize_or_zero()
+}
+
+/// How good a vantage point is: how far the view runs before it meets a
+/// surface, how far the strings will get along their heading, and how much
+/// room there is at the stand itself.
+///
+/// The two runs are capped. Past a few units more open space adds nothing —
+/// the structure has already receded past where detail reads — and without the
+/// cap the score just picks the largest void on the path every time, which is
+/// a view of nothing in particular.
+fn stand_score(stand: Vec3, shot: usize) -> f32 {
+    let forward = stand_forward(stand, shot);
+    let across = forward.cross(Vec3::Y).normalize_or_zero();
+    let above = across.cross(forward).normalize_or_zero();
+    let heading = string_heading(forward, across, above);
+
+    let view = crate::fractal::free_run(stand, forward, STAND_REACH);
+    let run = crate::fractal::free_run(stand + forward * FRACTAL_FOCUS, heading, STAND_REACH);
+
+    view.min(STAND_ENOUGH) + run.min(STAND_ENOUGH) + crate::fractal::distance(stand) * 8.0
 }
 
 impl Camera {
@@ -837,23 +965,29 @@ mod tests {
 
             // The near stretch — the first few units, where beads are close
             // enough to read as beads rather than as a thread. The far end of
-            // the corridor runs off behind the structure by design, so
-            // counting all of it would pass on a framing that shows only the
-            // vanishing point.
+            // a corridor runs off behind the structure by design, so counting
+            // all of it would pass on a framing that shows only the vanishing
+            // point.
+            //
+            // Checked per string, not pooled: the middle one is what the
+            // camera holds, so an average would let the outer two drift off
+            // the edge unnoticed.
             let near = crate::fractal::TRACK_POINTS / 4;
-            let visible = director.corridor.points[..near]
-                .iter()
-                .filter(|point| {
-                    let to = (**point - camera.eye).normalize_or_zero();
-                    to.dot(forward) > limit
-                })
-                .count();
-            worst = worst.min(visible as f32 / near as f32);
+            for corridor in &director.bundle {
+                let visible = corridor.points[..near]
+                    .iter()
+                    .filter(|point| {
+                        let to = (**point - camera.eye).normalize_or_zero();
+                        to.dot(forward) > limit
+                    })
+                    .count();
+                worst = worst.min(visible as f32 / near as f32);
+            }
         }
 
         assert!(
-            worst > 0.5,
-            "only {:.0}% of the near corridor was ever in frame",
+            worst > 0.4,
+            "only {:.0}% of a string's near stretch was ever in frame",
             worst * 100.0,
         );
     }

@@ -37,11 +37,10 @@ const CARDS: [&str; 6] = [
 const RENDER_SCALE: u32 = 2;
 
 pub const PARTICLE_COUNT: u32 = 512;
-/// Beads in the fractal scene's string. Enough, at the spacing in common.wgsl,
-/// to cover about three quarters of the corridor — so the string reads as a
-/// continuous line with a head and a tail, rather than as a loop with no ends
-/// or a scatter of separate dots.
-const FRACTAL_BEADS: u32 = 320;
+/// Beads in the fractal scene, split between the strings. At the spacing in
+/// common.wgsl this gives each about half the corridor's length — so a string
+/// reads as a cord with a head and a tail, rather than as a loop with no ends.
+const FRACTAL_BEADS: u32 = 180;
 
 /// Mirrors `Uniforms` in shaders/common.wgsl. Keep the field order in sync.
 #[repr(C)]
@@ -70,10 +69,10 @@ struct Uniforms {
     /// (collapse, unused, unused, unused).
     collapse: [f32; 4],
     /// The traced corridor the bead string runs along, as world positions.
-    track: [[f32; 4]; crate::fractal::TRACKS * crate::fractal::TRACK_POINTS],
+    track: [[f32; 4]; crate::fractal::STRINGS * crate::fractal::TRACK_POINTS],
     /// A perpendicular at each of those points, carried along the curve, for
     /// the curl to wind around.
-    track_frame: [[f32; 4]; crate::fractal::TRACKS * crate::fractal::TRACK_POINTS],
+    track_frame: [[f32; 4]; crate::fractal::STRINGS * crate::fractal::TRACK_POINTS],
 }
 
 /// Offscreen render targets, rebuilt whenever the window resizes.
@@ -245,8 +244,8 @@ impl Renderer {
         stage: &Stage,
         shot: &Camera,
         beads: u32,
-        track: [[f32; 4]; crate::fractal::TRACKS * crate::fractal::TRACK_POINTS],
-        track_frame: [[f32; 4]; crate::fractal::TRACKS * crate::fractal::TRACK_POINTS],
+        track: [[f32; 4]; crate::fractal::STRINGS * crate::fractal::TRACK_POINTS],
+        track_frame: [[f32; 4]; crate::fractal::STRINGS * crate::fractal::TRACK_POINTS],
         spin: &Spin,
         flow: f32,
         along: f32,
@@ -312,7 +311,7 @@ impl Renderer {
             track,
             track_frame,
             motion: [stage.merge, spin.yaw, spin.tilt, stage.palette],
-            frame: [music.dt.min(1.0 / 30.0), 0.0, flow, 0.0],
+            frame: [music.dt.min(1.0 / 30.0), stage.wash, flow, stage.beads],
         }
     }
 
@@ -326,12 +325,22 @@ impl Renderer {
         };
         let shot = self.director.update(music, &stage);
 
-        let mut track = [[0.0f32; 4]; crate::fractal::TRACKS * crate::fractal::TRACK_POINTS];
-        let mut track_frame = [[0.0f32; 4]; crate::fractal::TRACKS * crate::fractal::TRACK_POINTS];
-        let corridor = &self.director.corridor;
-        for (i, (slot, frame)) in track.iter_mut().zip(track_frame.iter_mut()).enumerate() {
-            let (point, normal) = (corridor.points[i], corridor.normals[i]);
-            *slot = [point.x, point.y, point.z, 0.0];
+        let mut track = [[0.0f32; 4]; crate::fractal::STRINGS * crate::fractal::TRACK_POINTS];
+        let mut track_frame = [[0.0f32; 4]; crate::fractal::STRINGS * crate::fractal::TRACK_POINTS];
+        // The corridors laid end to end, so the shader indexes one as
+        // string * TRACK_POINTS + point.
+        let flat = self.director.bundle.iter().flat_map(|c| {
+            c.points
+                .iter()
+                .zip(c.normals.iter())
+                .zip(c.clearance.iter())
+        });
+        for ((slot, frame), ((point, normal), clearance)) in
+            track.iter_mut().zip(track_frame.iter_mut()).zip(flat)
+        {
+            // The clearance rides in the position's spare w: the shader needs
+            // it wherever it samples the corridor, and it is one lookup there.
+            *slot = [point.x, point.y, point.z, *clearance];
             *frame = [normal.x, normal.y, normal.z, 0.0];
         }
         let spin = self.spin.update(music, &stage);

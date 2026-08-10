@@ -17,7 +17,7 @@ struct Uniforms {
     bands: array<vec4<f32>, 4>,
     /// Debug switches: (band overlay, unused, unused, unused).
     debug: vec4<f32>,
-    /// Per-frame values: (delta time, unused, softened beat, unused).
+    /// Per-frame values: (delta time, white wash, softened beat, bead arrival).
     frame: vec4<f32>,
     /// Intro state: (card index or -1, card opacity, scene fade, drift).
     intro: vec4<f32>,
@@ -345,42 +345,73 @@ fn fractal(point: vec3<f32>) -> FractalHit {
     return out;
 }
 
-/// Must match TRACK_POINTS and TRACK_STEP in fractal.rs.
+/// Must match STRINGS, TRACK_POINTS and TRACK_STEP in fractal.rs.
+const STRINGS: u32 = 3u;
 const TRACK_POINTS: u32 = 192u;
 const TRACK_STEP: f32 = 0.16;
-/// The corridor's full length in world units: (TRACK_POINTS - 1) * TRACK_STEP.
-const TRACK_LENGTH: f32 = 30.56;
+/// One corridor's full length in world units: (TRACK_POINTS - 1) * TRACK_STEP.
+const TRACK_LENGTH: f32 = 17.19;
 
 /// Distance between one bead and the next along the corridor, in world units.
-const FLOW_SPACING: f32 = 0.075;
-/// Travel along the corridor, in world units per second. Slow: the string is
+/// Matched to the bead size in particles.wgsl: a little under a diameter, so
+/// the string reads as one cord with the individual beads still visible along
+/// it rather than as a row of separate dots or a smooth tube.
+const FLOW_SPACING: f32 = 0.16;
+/// Travel along the corridor, in world units per second. Slow: the strings are
 /// meant to drift through the structure, not shoot down it.
 const FLOW_SPEED: f32 = 0.22;
+/// How much the strings differ in pace. They travel the same way — that is the
+/// point of the bundle — but not in lockstep, or the three read as one rigid
+/// object being dragged along.
+const FLOW_PACE_SPREAD: f32 = 0.17;
 
-/// The curl. The string does not run down the middle of the corridor — it
-/// winds around it, so the line reads as having a body and a direction of
-/// travel instead of as a wire.
+/// The curl. A string does not run down the middle of its corridor — it winds
+/// around it, so the line reads as having a body and a direction of travel
+/// instead of as a wire.
 ///
-/// The radius has to stay inside the clearance the corridor was traced for
-/// (fractal.rs TRACK_CLEARANCE), or the curl swings beads into the walls and
-/// they are culled on the way round.
-const CURL_RADIUS: f32 = 0.055;
+/// Every radius here is a *fraction of the clearance at that point on the
+/// corridor*, not a distance. A fixed radius cannot work: the passages vary in
+/// width, so one wide enough to see in the open swings beads into the walls
+/// wherever the corridor narrows, and those beads are culled — which is what
+/// had the strings breaking up into short fragments. Scaled to the room
+/// available, the helix opens out in the voids and tightens through the gaps,
+/// which is the string reading the architecture rather than ignoring it.
+const CURL_RADIUS: f32 = 0.30;
+/// What the beat and the bass add, again as fractions of the clearance. This
+/// is the loudest part of the audio sync: the helix visibly opens out on a hit
+/// and closes between.
+const CURL_FROM_BEAT: f32 = 0.34;
+const CURL_FROM_BASS: f32 = 0.22;
+/// The most of the clearance the curl may ever use. Under 1.0 with room to
+/// spare, because the clearance is sampled on the corridor and the bead sits
+/// off it — and because the estimator understates the true distance anyway.
+const CURL_CEILING: f32 = 0.80;
+
 /// Radians of winding per world unit — about one turn every 1.2 units.
 const CURL_RATE: f32 = 5.2;
-/// How fast the whole helix rotates about the corridor, in radians per second.
-/// Small: enough that the curl visibly turns, not so much that it spins.
-const CURL_DRIFT: f32 = 0.35;
+/// How far the helix rotates about its corridor per beat, in turns. Driven by
+/// the beat grid rather than by seconds, so the winding keeps time with the
+/// music instead of drifting against it — u.music.z counts beats and only ever
+/// increases, so using it as an angle cannot jump.
+const CURL_TURNS_PER_BEAT: f32 = 0.25;
 
-/// How far the string swings when a beat lands, and how tightly that wave is
-/// wound along it — a longer wavelength makes the whole string move together,
-/// a shorter one ripples.
-const BOUNCE_AMPLITUDE: f32 = 0.055;
-const BOUNCE_WAVELENGTH: f32 = 0.55;
+/// A swell travelling down the string: how much of the radius it takes, how
+/// tightly it is wound along the corridor, and how many corridor-lengths it
+/// travels per beat. This is what makes the string look like it is carrying
+/// the music along its length rather than pulsing all at once.
+const PULSE_DEPTH: f32 = 0.55;
+const PULSE_RATE: f32 = 0.9;
+const PULSE_SPEED: f32 = 1.5;
 
-/// How far from either end of the corridor beads fade, in world units. The
-/// string is shorter than the corridor and wraps around it, so without this
-/// the tail bead pops out of existence and reappears at the head.
-const FLOW_FADE: f32 = 2.2;
+/// How far from either end of the corridor beads fade, in world units.
+///
+/// The string wraps around the corridor, so the tail would otherwise pop out
+/// of existence and reappear at the head. Kept to a few beads' worth: a long
+/// fade had a third of the string permanently dim, which read as beads
+/// dissolving in mid-air rather than as the ends of a cord. The string is also
+/// well short of the corridor now (see FRACTAL_BEADS), so the head and tail
+/// spend most of their time in the clear rather than sitting in the taper.
+const FLOW_FADE: f32 = 0.55;
 
 /// How visible a bead is: gone inside the structure, full in the open. Fading
 /// on the distance field is smooth where pushing beads out of it was not, and
@@ -392,25 +423,29 @@ fn fractal_flow_visibility(p: vec3<f32>) -> f32 {
     return smoothstep(0.0, 0.025, fractal(p).distance);
 }
 
-/// A point on the corridor, with the frame to wind the curl around it.
+/// A point on the corridor, with the frame to wind the curl around it and the
+/// room there is to do it in.
 struct FlowFrame {
     position: vec3<f32>,
     normal: vec3<f32>,
     tangent: vec3<f32>,
+    clearance: f32,
 };
 
-/// The corridor the beads run on: traced against the structure on the CPU and
+/// The corridor a string runs on: traced against the structure on the CPU and
 /// sampled here by distance along it.
 ///
 /// An analytic curve cannot follow a tunnel — it has no idea where the walls
 /// are, so it clips through them. This one was steered by the distance field,
 /// and resampled to uniform arc length so `s` really is a distance.
-fn flow_track(s: f32) -> FlowFrame {
+fn flow_track(s: f32, string: u32) -> FlowFrame {
     let last = f32(TRACK_POINTS - 1u);
     let position = clamp(s / TRACK_STEP, 0.0, last);
 
-    let index = u32(floor(position));
-    let next = min(index + 1u, TRACK_POINTS - 1u);
+    // The corridors are laid end to end in one array.
+    let base = string * TRACK_POINTS;
+    let index = base + u32(floor(position));
+    let next = base + min(u32(floor(position)) + 1u, TRACK_POINTS - 1u);
     let f = fract(position);
 
     let a = u.track[index].xyz;
@@ -423,46 +458,66 @@ fn flow_track(s: f32) -> FlowFrame {
     // The transported frame, so the curl cannot flip where the corridor bends.
     out.normal = normalize(mix(u.track_frame[index].xyz, u.track_frame[next].xyz, f));
     out.tangent = normalize(b - a);
+    out.clearance = mix(u.track[index].w, u.track[next].w, f);
     return out;
 }
 
-/// A bead in the string.
+/// A bead in one of the strings.
 ///
-/// Every bead sits on the corridor at a fixed spacing behind the one ahead and
-/// the whole string advances together, so it moves like a string being drawn
-/// through the structure rather than like a swarm that happens to share a
-/// direction. Only the head's position is animated; the rest follows from the
-/// spacing.
+/// Beads are dealt round-robin between the strings, so each gets an even share
+/// and they stay the same length as one another. Within a string every bead
+/// sits on the corridor at a fixed spacing behind the one ahead and the whole
+/// thing advances together, so it moves like a string being drawn through the
+/// structure rather than like a swarm that happens to share a direction. Only
+/// the head's position is animated; the rest follows from the spacing.
 ///
 /// `w` is how visible the bead is: faded at the ends of the corridor, and gone
 /// where it is inside the structure.
 fn fractal_flow_bead(i: u32) -> vec4<f32> {
-    let place = f32(i);
+    let string = i % STRINGS;
+    let place = f32(i / STRINGS);
+    let si = f32(string);
 
+    // All strings travel the same way — the bundle is one current through the
+    // structure — but at slightly different paces and starting offsets, so
+    // they are not a rigid formation.
+    let pace = 1.0 + (si - f32(STRINGS - 1u) * 0.5) * FLOW_PACE_SPREAD;
+    let s = u.time * FLOW_SPEED * pace - place * FLOW_SPACING + si * 5.7;
     // The string wraps around the corridor, so it never runs out of track.
-    let s = u.time * FLOW_SPEED - place * FLOW_SPACING;
     let wrapped = fract(s / TRACK_LENGTH) * TRACK_LENGTH;
 
-    let frame = flow_track(wrapped);
+    let frame = flow_track(wrapped, string);
     let binormal = normalize(cross(frame.tangent, frame.normal));
 
-    // The curl's phase comes from distance along the corridor, not from the
-    // bead's index — so the helix stands still in space and the beads travel
-    // along it, which is what reads as flow. Phase from the index instead
-    // would carry the whole helix with the string, and the curl would look
-    // painted on.
-    let phase = wrapped * CURL_RATE + u.time * CURL_DRIFT;
-    let curl = (frame.normal * cos(phase) + binormal * sin(phase)) * CURL_RADIUS;
+    // How wide the helix is right now. A floor, so there is always a curl,
+    // plus what the music adds: the softened beat opens it on every hit
+    // (u.frame.z, not the raw pulse, which rises in a single frame and made
+    // the string jitter rather than swell), and the bass holds it open through
+    // a loud passage.
+    //
+    // The swell travels: its phase runs along the corridor and advances with
+    // the beat grid, so what the eye follows is a widening moving down the
+    // string in time rather than the whole string breathing at once. Its own
+    // phase per string, so the three do not pulse together.
+    let travel = wrapped * PULSE_RATE - u.music.z * 2.0 * PI * PULSE_SPEED + si * 2.1;
+    let pulse = 1.0 + sin(travel) * PULSE_DEPTH;
+    let drive = (u.frame.z * CURL_FROM_BEAT + u.audio.x * CURL_FROM_BASS) * pulse;
+    // Everything above is a fraction of what the corridor has room for here.
+    let radius = clamp(CURL_RADIUS + drive, 0.0, CURL_CEILING) * frame.clearance;
 
-    // A wave running down the string, kicked on each beat. The phase advances
-    // with the beat grid rather than with time, so it stays locked to the
-    // music; the amplitude is the softened beat (u.frame.z, not the pulse
-    // itself, which rises in a single frame and made the string jitter rather
-    // than swing).
-    let beat_phase = place * BOUNCE_WAVELENGTH - u.music.z * 2.0 * PI;
-    let swing = frame.normal * sin(beat_phase) * u.frame.z * BOUNCE_AMPLITUDE;
-
-    let position = frame.position + curl + swing;
+    // The curl's winding phase comes from distance along the corridor, not
+    // from the bead's index — so the helix stands still in space and the beads
+    // travel along it, which is what reads as flow. Phase from the index
+    // instead would carry the whole helix with the string, and the curl would
+    // look painted on.
+    //
+    // On top of that the helix rotates about the corridor, by beats rather
+    // than seconds, so the winding turns in time with the music.
+    let phase = wrapped * CURL_RATE
+        + u.music.z * CURL_TURNS_PER_BEAT * 2.0 * PI
+        + si * 2.4;
+    let position = frame.position
+        + (frame.normal * cos(phase) + binormal * sin(phase)) * radius;
 
     // Faded in at the head of the corridor and out at the tail, so the wrap is
     // a bead dimming away and another brightening rather than a jump.

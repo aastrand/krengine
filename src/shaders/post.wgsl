@@ -137,6 +137,19 @@ fn fs_main(in: FullscreenOut) -> @location(0) vec4<f32> {
     let grey = dot(color, vec3<f32>(0.299, 0.587, 0.114));
     color = mix(color, vec3<f32>(grey), falloff * 0.35);
 
+    // The room going white over the change, and coming back on the far side.
+    //
+    // The old scene and the fractal have nothing in common — not their
+    // geometry, their palette, or their lighting — so any wipe between them is
+    // a cut with a decoration on it. Washing the frame out hides the swap
+    // inside the brightest moment instead, and the eye reads it as the light
+    // in the room going up rather than as a scene ending.
+    //
+    // Applied here, after grading and the vignette: those are what the old
+    // scene looks like, and the wash has to cover them too or the frame goes
+    // white with a dark ring still around it.
+    color = mix(color, vec3<f32>(1.0), u.frame.y);
+
     // Dither before the swapchain quantises to 8 bits. Smooth gradients — the
     // vignette above all — step visibly without it, since 8 bits cannot
     // resolve a slow ramp across a thousand pixels.
