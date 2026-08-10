@@ -13,7 +13,7 @@ pub enum Frame {
 use crate::gpu::Gpu;
 use crate::audio::Sync;
 use crate::passes::bloom::{BloomPass, BloomTargets};
-use crate::passes::smoke::SmokePass;
+use crate::passes::fluid::FluidPass;
 use crate::passes::{
     DEPTH_FORMAT, HDR_FORMAT, particles::ParticlePass, post::PostPass, scene::ScenePass,
 };
@@ -42,6 +42,7 @@ struct Uniforms {
     /// The FFT spectrum, packed four bands to a vec4 for std140 alignment.
     bands: [[f32; 4]; crate::audio::BAND_COUNT / 4],
     debug: [f32; 4],
+    frame: [f32; 4],
 }
 
 /// Offscreen render targets, rebuilt whenever the window resizes.
@@ -84,7 +85,7 @@ impl Targets {
             depth: make(
                 "depth buffer",
                 DEPTH_FORMAT,
-                wgpu::TextureUsages::RENDER_ATTACHMENT,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             ),
         }
     }
@@ -95,7 +96,7 @@ pub struct Renderer {
     uniform_bind_group: wgpu::BindGroup,
 
     scene: ScenePass,
-    smoke: SmokePass,
+    fluid: FluidPass,
     particles: ParticlePass,
     bloom: BloomPass,
     post: PostPass,
@@ -122,7 +123,8 @@ impl Renderer {
             label: Some("uniform layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                // Compute too: the fluid kernels read time and dt from here.
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -142,7 +144,7 @@ impl Renderer {
         });
 
         let scene = ScenePass::new(device, &uniform_layout);
-        let smoke = SmokePass::new(device, &uniform_layout);
+
         let particles = ParticlePass::new(device, &uniform_layout);
         let bloom = BloomPass::new(device, &uniform_layout);
         let post = PostPass::new(
@@ -153,6 +155,7 @@ impl Renderer {
         );
 
         let targets = Targets::new(device, gpu.config.width, gpu.config.height);
+        let fluid = FluidPass::new(device, &uniform_layout);
         let bloom_targets =
             bloom.targets(device, &targets.hdr, gpu.config.width, gpu.config.height);
         let hdr_bind_group = post.make_bind_group(device, &targets.hdr);
@@ -161,7 +164,7 @@ impl Renderer {
             uniform_buf,
             uniform_bind_group,
             scene,
-            smoke,
+            fluid,
             particles,
             bloom,
             post,
@@ -222,10 +225,12 @@ impl Renderer {
             ],
             bands: bytemuck::cast(music.bands),
             debug: [if show_bands { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
+            // Clamped: a long stall must not blow the simulation up.
+            frame: [music.dt.min(1.0 / 30.0), 0.0, 0.0, 0.0],
         }
     }
 
-    pub fn render(&self, gpu: &Gpu, music: &Sync) -> Frame {
+    pub fn render(&mut self, gpu: &Gpu, music: &Sync) -> Frame {
         let uniforms = Self::uniforms(gpu, music, self.show_bands);
         gpu.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
@@ -250,18 +255,13 @@ impl Renderer {
                 label: Some("frame encoder"),
             });
 
+        self.fluid.simulate(&mut encoder, &self.uniform_bind_group);
+
         self.scene.draw(
             &mut encoder,
             &self.targets.hdr,
             &self.targets.depth,
             &self.uniform_bind_group,
-        );
-        self.smoke.draw(
-            &mut encoder,
-            &self.targets.hdr,
-            &self.targets.depth,
-            &self.uniform_bind_group,
-            PARTICLE_COUNT,
         );
         self.particles.draw(
             &mut encoder,
@@ -270,6 +270,8 @@ impl Renderer {
             &self.uniform_bind_group,
             PARTICLE_COUNT,
         );
+        self.fluid
+            .draw(&mut encoder, &self.targets.hdr, &self.uniform_bind_group);
         self.bloom
             .draw(&mut encoder, &self.bloom_targets, &self.uniform_bind_group);
         self.post.draw(

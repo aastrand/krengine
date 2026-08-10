@@ -96,6 +96,7 @@ impl ApplicationHandler for App {
                     Some(music) => music.sample(dt),
                     None => Sync {
                         time: (now - state.start).as_secs_f32(),
+                        dt,
                         ..Default::default()
                     },
                 };

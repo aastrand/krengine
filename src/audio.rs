@@ -91,6 +91,8 @@ pub struct Sync {
     pub pattern: u32,
     /// Backend-reported output latency, already applied to `time`.
     pub output_latency: f32,
+    /// Seconds since the previous frame.
+    pub dt: f32,
 }
 
 /// Shared between the audio thread and the render loop. All fields are written
@@ -518,6 +520,7 @@ impl Music {
             beat: self.beat,
             row: self.state.row.load(Ordering::Relaxed),
             output_latency: f32::from_bits(self.state.latency.load(Ordering::Relaxed)),
+            dt,
             pattern: self.state.pattern.load(Ordering::Relaxed),
         }
     }

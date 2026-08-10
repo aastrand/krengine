@@ -17,6 +17,8 @@ struct Uniforms {
     bands: array<vec4<f32>, 4>,
     /// Debug switches: (band overlay, unused, unused, unused).
     debug: vec4<f32>,
+    /// Per-frame values: (delta time, unused, unused, unused).
+    frame: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
