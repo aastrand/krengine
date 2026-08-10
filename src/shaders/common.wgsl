@@ -21,8 +21,10 @@ struct Uniforms {
     frame: vec4<f32>,
     /// Intro state: (card index or -1, card opacity, scene fade, drift).
     intro: vec4<f32>,
-    /// Card presentation: (scale, unused, unused, unused).
+    /// Card presentation: (scale, progress, unused, unused).
     card: vec4<f32>,
+    /// Scene state: (spike amount, dissolve, unused, unused).
+    scene: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;

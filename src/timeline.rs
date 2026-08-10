@@ -19,6 +19,9 @@ const CARD_FADE: f32 = 0.35;
 /// When the scene begins to appear, and how long it takes.
 const SCENE_START: f32 = 7.7;
 const SCENE_FADE: f32 = 2.4;
+/// When the ferrofluid takes over, in beats from the start.
+const SPIKE_BEATS: f32 = 64.0;
+
 /// How far a card travels while it is on screen, in cap heights.
 const SCROLL_RANGE: f32 = 1.5;
 
@@ -37,6 +40,10 @@ pub struct Stage {
     pub scale: f32,
     /// How far through its life the card is, 0 to 1.
     pub card_progress: f32,
+    /// How far the blob has turned into a ferrofluid, 0 to 1.
+    pub spike: f32,
+    /// Transition mask threshold: 0 is fully the old scene, 1 the new one.
+    pub dissolve: f32,
 }
 
 impl Stage {
@@ -69,9 +76,17 @@ impl Stage {
         // Cards breathe on the beat rather than sitting flat.
         card_alpha *= 0.82 + music.beat * 0.35;
 
+        // Scene changes, in beats from the start of the tune. The blob spends
+        // the opening as a fluid, then bristles.
+        let beats = music.beat_phase;
+        let spike = smoothstep(SPIKE_BEATS, SPIKE_BEATS + 16.0, beats);
+        let dissolve = smoothstep(SPIKE_BEATS - 4.0, SPIKE_BEATS + 12.0, beats);
+
         Self {
             card,
             card_alpha,
+            spike,
+            dissolve,
             scene: smoothstep(SCENE_START, SCENE_START + SCENE_FADE, t),
             scroll,
             scale,

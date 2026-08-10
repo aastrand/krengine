@@ -5,6 +5,12 @@
 @group(1) @binding(1) var hdr_sampler: sampler;
 @group(2) @binding(0) var bloom_tex: texture_2d<f32>;
 @group(2) @binding(1) var bloom_sampler: sampler;
+@group(3) @binding(0) var mask_tex: texture_2d<f32>;
+@group(3) @binding(1) var mask_sampler: sampler;
+
+/// Width of the dissolve's edge, in dye units. Narrow enough that the fluid's
+/// filaments show in the boundary.
+const DISSOLVE_EDGE: f32 = 0.10;
 
 /// How much of the blurred highlights to mix back in.
 const BLOOM_STRENGTH: f32 = 0.55;
@@ -96,6 +102,30 @@ fn fs_main(in: FullscreenOut) -> @location(0) vec4<f32> {
     // Bloom is added before tonemapping, so highlights roll off together with
     // everything else rather than clipping to white.
     color += textureSample(bloom_tex, bloom_sampler, uv).rgb * BLOOM_STRENGTH;
+
+    // Scene transition, masked by the fluid.
+    //
+    // The dye field is already a full-screen scalar, so it can threshold one
+    // grade into another. Sweeping the threshold from above the dye's maximum
+    // down past zero wipes the frame in the shape of the flow, which means the
+    // transition curls and is never the same twice.
+    let dye = textureSample(mask_tex, mask_sampler, uv).x;
+    let threshold = mix(1.5, -DISSOLVE_EDGE, u.scene.y);
+    let crossed = smoothstep(threshold + DISSOLVE_EDGE, threshold - DISSOLVE_EDGE, dye);
+
+    // What the scene grades to on the far side: warmer and harder, to sit with
+    // the ferrofluid.
+    let after = mix(
+        vec3<f32>(dot(color, vec3<f32>(0.299, 0.587, 0.114))),
+        color * vec3<f32>(1.18, 0.98, 0.88),
+        1.25,
+    );
+    color = mix(color, after, crossed);
+
+    // The dissolve's leading edge glows, so the wipe reads as something
+    // burning through rather than a fade.
+    let edge = crossed * (1.0 - crossed) * 4.0;
+    color += VEIN_COLOR * edge * 0.5;
 
     color = tonemap(color * 1.15);
 

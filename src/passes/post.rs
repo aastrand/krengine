@@ -47,7 +47,12 @@ impl PostPass {
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("post layout"),
-            bind_group_layouts: &[Some(uniform_layout), Some(&hdr_layout), Some(bloom_layout)],
+            bind_group_layouts: &[
+                Some(uniform_layout),
+                Some(&hdr_layout),
+                Some(bloom_layout),
+                Some(&hdr_layout),
+            ],
             immediate_size: 0,
         });
 
@@ -104,6 +109,7 @@ impl PostPass {
         uniforms: &wgpu::BindGroup,
         hdr: &wgpu::BindGroup,
         bloom: &wgpu::BindGroup,
+        mask: &wgpu::BindGroup,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("post pass"),
@@ -125,6 +131,7 @@ impl PostPass {
         pass.set_bind_group(0, uniforms, &[]);
         pass.set_bind_group(1, hdr, &[]);
         pass.set_bind_group(2, bloom, &[]);
+        pass.set_bind_group(3, mask, &[]);
         pass.draw(0..3, 0..1);
     }
 }

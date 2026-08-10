@@ -448,6 +448,18 @@ impl FluidPass {
         }
     }
 
+    /// The middle sheet's dye, which post uses as a transition mask, and
+    /// which of the pair currently holds this frame's result.
+    pub fn mask_views(&self) -> [&wgpu::TextureView; 2] {
+        let layer = &self.layers[self.layers.len() / 2];
+        [&layer.dye[0], &layer.dye[1]]
+    }
+
+    pub fn mask_parity(&self) -> usize {
+        // advect writes into the buffer the parity does *not* name.
+        1 - self.layers[self.layers.len() / 2].parity
+    }
+
     /// Rebuild the bind groups that reference the depth buffer.
     pub fn resize(&mut self, device: &wgpu::Device, depth: &wgpu::TextureView) {
         for layer in &mut self.layers {

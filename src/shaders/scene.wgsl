@@ -9,10 +9,31 @@ struct SceneOut {
 // Bounding sphere for the blob, so rays skip straight to it instead of
 // marching empty space.
 const BOUND_RADIUS: f32 = 1.6;
+/// Extra reach once the spikes are out, so their tips are not clipped away.
+const SPIKE_BOUND: f32 = 0.55;
+
+/// How far the spikes reach at full strength.
+const SPIKE_LENGTH: f32 = 0.42;
 
 // How wide the merge fillet is. Large k = strong surface tension: surfaces
 // reach for each other and neck together long before they actually touch.
 const BLEND_K: f32 = 0.40;
+
+/// Ferrofluid spikes.
+///
+/// A field of lobes over the direction from a blob's centre, so the surface
+/// bristles outward along its own normals the way a magnetised fluid does.
+/// Driven by the bass, so the spikes stand up on the beat.
+fn spikes(direction: vec3<f32>) -> f32 {
+    let t = u.time * 0.4;
+    // Three offset lobe fields, so the spacing does not read as a grid.
+    let a = sin(direction.x * 7.0 + t) * sin(direction.y * 7.0 - t) * sin(direction.z * 7.0);
+    let b = sin(direction.x * 4.3 - t) * sin(direction.y * 4.3) * sin(direction.z * 4.3 + t);
+    let lobes = abs(a) * 0.65 + abs(b) * 0.35;
+
+    // A high power turns rounded bumps into points.
+    return pow(lobes, 4.0);
+}
 
 // A single blob. Each one breathes on its own axes and carries a slow surface
 // ripple, so no two are the same shape at the same moment.
@@ -31,7 +52,11 @@ fn sd_blob(q: vec3<f32>, r: f32, seed: f32) -> f32 {
         * sin(q.y * 6.5 - t * 0.9 + seed * 2.0)
         * sin(q.z * 6.5 + t * 0.7);
 
-    return ellipsoid - ripple * 0.03;
+    // Spikes push the surface out along the direction from this blob's centre.
+    let direction = q / max(length(q), 1.0e-4);
+    let bristle = spikes(direction) * u.scene.x * (0.35 + u.audio.x * 0.9) * SPIKE_LENGTH;
+
+    return ellipsoid - ripple * 0.03 - bristle;
 }
 
 // The liquid-metal blob suspended inside the sphere.
@@ -78,9 +103,10 @@ fn march_inner(ro: vec3<f32>, rd: vec3<f32>, t_min: f32, t_max: f32) -> f32 {
         if d < 0.0015 * t {
             return t;
         }
-        // Understep: the ripple makes the field non-Lipschitz, so full steps
-        // would punch through thin surfaces.
-        t = t + d * 0.7;
+        // Understep: the ripple and the spikes make the field non-Lipschitz,
+        // so a full step would punch through them. Spikes are much worse than
+        // the ripple, so the factor tightens as they extend.
+        t = t + d * mix(0.7, 0.42, u.scene.x);
         if t > t_max {
             break;
         }
@@ -179,7 +205,7 @@ fn fs_main(in: FullscreenOut) -> SceneOut {
     out.color = vec4<f32>(environment(rd) * fade, 1.0);
     out.depth = 1.0; // background sits at the far plane
 
-    let bounds = intersect_sphere(ro, rd, BOUND_RADIUS);
+    let bounds = intersect_sphere(ro, rd, BOUND_RADIUS + SPIKE_BOUND * u.scene.x);
     if bounds.y < 0.0 {
         return out;
     }

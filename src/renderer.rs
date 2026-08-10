@@ -51,6 +51,7 @@ struct Uniforms {
     /// (card index, card opacity, scene fade, drift).
     intro: [f32; 4],
     card: [f32; 4],
+    scene: [f32; 4],
 }
 
 /// Offscreen render targets, rebuilt whenever the window resizes.
@@ -113,6 +114,8 @@ pub struct Renderer {
     targets: Targets,
     bloom_targets: BloomTargets,
     hdr_bind_group: wgpu::BindGroup,
+    /// One per dye buffer; the fluid says which is current each frame.
+    mask_bind_groups: [wgpu::BindGroup; 2],
     /// Draws the spectrum as bars over the frame, for picking a band by eye.
     pub show_bands: bool,
     director: Director,
@@ -171,6 +174,11 @@ impl Renderer {
         let bloom_targets =
             bloom.targets(device, &targets.hdr, gpu.config.width, gpu.config.height);
         let hdr_bind_group = post.make_bind_group(device, &targets.hdr);
+        let masks = fluid.mask_views();
+        let mask_bind_groups = [
+            post.make_bind_group(device, masks[0]),
+            post.make_bind_group(device, masks[1]),
+        ];
 
         Self {
             uniform_buf,
@@ -184,6 +192,7 @@ impl Renderer {
             targets,
             bloom_targets,
             hdr_bind_group,
+            mask_bind_groups,
             show_bands: false,
             director: Director::default(),
         }
@@ -247,6 +256,7 @@ impl Renderer {
                 stage.scroll,
             ],
             card: [stage.scale, stage.card_progress, 0.0, 0.0],
+            scene: [stage.spike, stage.dissolve, 0.0, 0.0],
             frame: [music.dt.min(1.0 / 30.0), 0.0, 0.0, 0.0],
         }
     }
@@ -312,6 +322,7 @@ impl Renderer {
             &self.uniform_bind_group,
             &self.hdr_bind_group,
             self.bloom_targets.result(),
+            &self.mask_bind_groups[self.fluid.mask_parity()],
         );
 
         gpu.queue.submit(Some(encoder.finish()));
