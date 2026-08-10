@@ -52,11 +52,22 @@ impl ParticlePass {
                 })],
             }),
             primitive: wgpu::PrimitiveState::default(),
-            // Tests against the blob the scene pass wrote, and writes its own
-            // depth so beads sort against each other too.
+            // Tests against what the scene pass wrote, so the structure
+            // occludes the beads — but writes no depth of its own.
+            //
+            // Writing it made the beads clip each other rather than blend: a
+            // bead's quad covers a square, most of which is the soft fringe
+            // the fragment shader fades out, and depth was written across all
+            // of it. The next bead behind was then cut off along that square's
+            // edge, which is the hard crescent that showed wherever two
+            // overlapped. Depth-writing and alpha-blending the same geometry
+            // cannot both work; these are dark ink dots laid over the scene,
+            // so blending is the half that matters. They no longer sort
+            // against one another, which costs nothing: they are all the same
+            // near-black, and overlapping ones simply read as denser ink.
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
+                depth_write_enabled: Some(false),
                 depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
