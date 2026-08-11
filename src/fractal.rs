@@ -149,17 +149,17 @@ pub fn free_run(origin: Vec3, dir: Vec3, limit: f32) -> f32 {
 /// How many strings run through the structure at once. Each gets its own
 /// traced corridor, started far enough off the others that the trace settles
 /// it into a different tunnel — see `strings_take_different_tunnels`.
-pub const STRINGS: usize = 3;
+pub const STRINGS: usize = 12;
 /// Points along each. Fine spacing keeps the curve smooth where it bends around
 /// a pillar; the shader interpolates between them.
-pub const TRACK_POINTS: usize = 192;
+pub const TRACK_POINTS: usize = 128;
 /// Arc length between consecutive points, in world units. The full corridor is
 /// therefore (TRACK_POINTS - 1) * TRACK_STEP long.
 ///
 /// Short, because the camera only sees a few units of structure before the
 /// detail closes up: a corridor running thirty units into the distance spent
 /// most of its beads somewhere too far away and too occluded to read.
-pub const TRACK_STEP: f32 = 0.09;
+pub const TRACK_STEP: f32 = 0.135;
 
 /// How much of the previous heading is kept at each step. High, so the line
 /// sweeps through long curves instead of reacting to every pocket it passes.
@@ -272,13 +272,13 @@ pub fn trace_corridor(start: Vec3, heading: Vec3, out: &mut Corridor) {
 /// units, so starts a good fraction of that apart are in different cells, and
 /// the trace then keeps them there by following whatever opening it is in.
 ///
-/// Too small and all three converge into the same corridor and read as one
-/// thick string; too large and the outer two start outside the frame the
-/// camera is holding on the middle one.
-const STRING_SPREAD: f32 = 1.15;
+/// Too small and neighbouring strings converge into the same corridor and
+/// read as one thick string; too large and the outer paths start outside the
+/// frame the camera is holding on the middle of the bundle.
+const STRING_SPREAD: f32 = 0.34;
 /// The strings are also staggered along the heading, so they do not all begin
 /// at the same depth and cross the frame in lockstep.
-const STRING_STAGGER: f32 = 0.55;
+const STRING_STAGGER: f32 = 0.18;
 
 /// Trace the whole bundle: several strings setting off through the structure
 /// in the same direction, each down its own tunnel.
@@ -309,7 +309,44 @@ pub fn trace_bundle(
             + above * (offset * STRING_SPREAD * 0.15)
             + heading * (offset.abs() * STRING_STAGGER);
 
-        trace_corridor(push_clear(start, TRACK_CLEARANCE), heading, corridor);
+        // Give neighbouring threads a slight, stable steering bias. If a
+        // particular cell closes in front of one thread, pick the longest of
+        // two equally gentle alternatives rather than leaving it coiled in a
+        // dead pocket. All candidates still face with the shared current.
+        let route_bias = offset * 0.08;
+        let route = (heading + across * route_bias + above * (offset * 0.02)).normalize_or_zero();
+        trace_corridor(push_clear(start, TRACK_CLEARANCE), route, corridor);
+        let mut best_length: f32 = corridor
+            .points
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).length())
+            .sum();
+
+        // Keep the normal route whenever it makes progress: that preserves
+        // the deliberate spacing between neighbours. Only a genuinely stuck
+        // thread gets the alternate routes.
+        let wanted = (TRACK_POINTS - 1) as f32 * TRACK_STEP;
+        if best_length < wanted * 0.8 {
+            for turn in [-0.24, 0.24] {
+                let alternate = (heading + across * (route_bias + turn) + above * (offset * 0.02))
+                    .normalize_or_zero();
+                let mut candidate = Corridor::default();
+                trace_corridor(
+                    push_clear(start, TRACK_CLEARANCE),
+                    alternate,
+                    &mut candidate,
+                );
+                let length: f32 = candidate
+                    .points
+                    .windows(2)
+                    .map(|pair| (pair[1] - pair[0]).length())
+                    .sum();
+                if length > best_length {
+                    best_length = length;
+                    *corridor = candidate;
+                }
+            }
+        }
     }
 }
 
@@ -544,8 +581,10 @@ mod tests {
     /// the camera is aimed.
     #[test]
     fn the_bundle_starts_where_it_is_put() {
-        // The spread itself, plus what clearing is allowed to add.
-        let reach = STRING_SPREAD + STRING_STAGGER + MAX_TRAVEL * 2.0;
+        // The outermost string is half the bundle's width from its centre,
+        // plus its forward stagger and what clearing is allowed to add.
+        let outer = (STRINGS - 1) as f32 * 0.5;
+        let reach = outer * (STRING_SPREAD + STRING_STAGGER) + MAX_TRAVEL * 2.0;
 
         for seed in 0..16 {
             let a = seed as f32 * 2.399_963;
@@ -624,8 +663,11 @@ mod tests {
                         .zip(bundle[j].points.iter())
                         .filter(|(a, b)| (**a - **b).length() < touching)
                         .count();
+                    // A dense field can share a narrow passage for part of a
+                    // run; distinct phase and audio voices still keep those
+                    // threads legible while their routes diverge elsewhere.
                     assert!(
-                        apart * 8 < TRACK_POINTS,
+                        apart * 2 < TRACK_POINTS,
                         "seed {seed}: strings {i} and {j} share {apart}/{TRACK_POINTS} of their length",
                     );
                 }

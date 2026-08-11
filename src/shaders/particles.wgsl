@@ -8,6 +8,7 @@ struct VsOut {
     @location(1) tint: vec3<f32>,
     @location(2) visible: f32,
     @location(3) scene: f32,
+    @location(4) arrival: f32,
 };
 
 const QUAD: array<vec2<f32>, 6> = array<vec2<f32>, 6>(
@@ -49,6 +50,12 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     }
 
     let fi = f32(ii);
+    // A reveal sweeps from each string's leading bead to its tail. The global
+    // arrival is deliberately delayed until after the transition; scaling it
+    // past one gives the last bead enough time to finish its soft pop-in.
+    let per_string = max(u.particle_count / f32(STRINGS), 1.0);
+    let order = (f32(ii / STRINGS) + 0.5) / per_string;
+    let arrival = smoothstep(order, order + 0.18, u.frame.w * 1.2);
     // Much bigger against the fractal. The structure fills the frame and the
     // camera is metres from the strings, so beads at the blob's size came out
     // as a few dark pixels — the string was there and could not be seen. At
@@ -57,13 +64,15 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     // The beat barely moves them in the fractal scene; nothing there is meant
     // to punch.
     let pulse = 1.0 + u.audio.w * mix(0.45, 0.06, fractal_scene);
-    let size = (0.018 + 0.022 * fract(fi * 0.31)) * pulse * mix(1.0, 4.0, fractal_scene);
+    let size = (0.018 + 0.022 * fract(fi * 0.31)) * pulse
+        * mix(1.0, 4.0 * (0.55 + arrival * 0.45), fractal_scene);
     let world = center + (u.camera_right.xyz * corner.x + u.camera_up.xyz * corner.y) * size;
 
     var out: VsOut;
     out.pos = u.view_proj * vec4<f32>(world, 1.0);
     out.visible = visible;
     out.scene = fractal_scene;
+    out.arrival = arrival;
     out.local = corner;
     // Shades of dark only — no hue, just how black each bead sits.
     out.tint = vec3<f32>(0.012, 0.014, 0.022) * (0.4 + 1.6 * fract(fi * 0.517));
@@ -80,12 +89,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     // Gone through the ferrofluid, back for the fractal.
     //
-    // u.frame.w brings them up behind the white wash rather than at it: the
-    // strings belong to the fractal, and a string already threading a
-    // structure that has not appeared yet reads as the old scene sprouting
-    // something. In the fractal scene it is the whole of their presence; in
-    // the first scene it is not used, since in.scene is zero there.
-    let arrived = mix(1.0, u.frame.w, in.scene);
+    // The new scene gets a clean beat before a strand-by-strand reveal. In
+    // the first scene `in.scene` is zero, so this remains fully present.
+    let arrived = mix(1.0, in.arrival, in.scene);
     let presence = max(1.0 - u.scene.x, in.scene) * in.visible * arrived;
     return vec4<f32>(in.tint, smoothstep(1.0, 0.55, r) * 0.92 * u.intro.z * presence);
 }

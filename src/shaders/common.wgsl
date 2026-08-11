@@ -33,9 +33,9 @@ struct Uniforms {
     /// The traced corridors the bead strings run along, laid end to end:
     /// STRINGS * TRACK_POINTS entries. Both counts must match fractal.rs — see
     /// the uniform_arrays_match_the_cpu test in shader.rs.
-    track: array<vec4<f32>, 576>,
+    track: array<vec4<f32>, 1536>,
     /// A perpendicular at each corridor point, for the curl to wind around.
-    track_frame: array<vec4<f32>, 576>,
+    track_frame: array<vec4<f32>, 1536>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -348,24 +348,24 @@ fn fractal(point: vec3<f32>) -> FractalHit {
 }
 
 /// Must match STRINGS, TRACK_POINTS and TRACK_STEP in fractal.rs.
-const STRINGS: u32 = 3u;
-const TRACK_POINTS: u32 = 192u;
-const TRACK_STEP: f32 = 0.16;
+const STRINGS: u32 = 12u;
+const TRACK_POINTS: u32 = 128u;
+const TRACK_STEP: f32 = 0.135;
 /// One corridor's full length in world units: (TRACK_POINTS - 1) * TRACK_STEP.
-const TRACK_LENGTH: f32 = 17.19;
+const TRACK_LENGTH: f32 = 17.145;
 
 /// Distance between one bead and the next along the corridor, in world units.
 /// Matched to the bead size in particles.wgsl: a little under a diameter, so
 /// the string reads as one cord with the individual beads still visible along
 /// it rather than as a row of separate dots or a smooth tube.
-const FLOW_SPACING: f32 = 0.16;
+const FLOW_SPACING: f32 = 0.13;
 /// Travel along the corridor, in world units per second. Slow: the strings are
 /// meant to drift through the structure, not shoot down it.
 const FLOW_SPEED: f32 = 0.22;
 /// How much the strings differ in pace. They travel the same way — that is the
-/// point of the bundle — but not in lockstep, or the three read as one rigid
+/// point of the bundle — but not in lockstep, or the threads read as one rigid
 /// object being dragged along.
-const FLOW_PACE_SPREAD: f32 = 0.17;
+const FLOW_PACE_SPREAD: f32 = 0.07;
 
 /// The curl. A string does not run down the middle of its corridor — it winds
 /// around it, so the line reads as having a body and a direction of travel
@@ -378,12 +378,12 @@ const FLOW_PACE_SPREAD: f32 = 0.17;
 /// had the strings breaking up into short fragments. Scaled to the room
 /// available, the helix opens out in the voids and tightens through the gaps,
 /// which is the string reading the architecture rather than ignoring it.
-const CURL_RADIUS: f32 = 0.30;
+const CURL_RADIUS: f32 = 0.055;
 /// What the beat and the bass add, again as fractions of the clearance. This
 /// is the loudest part of the audio sync: the helix visibly opens out on a hit
 /// and closes between.
-const CURL_FROM_BEAT: f32 = 0.34;
-const CURL_FROM_BASS: f32 = 0.22;
+const CURL_FROM_BEAT: f32 = 0.38;
+const CURL_FROM_BASS: f32 = 0.24;
 /// The most of the clearance the curl may ever use. Under 1.0 with room to
 /// spare, because the clearance is sampled on the corridor and the bead sits
 /// off it — and because the estimator understates the true distance anyway.
@@ -391,19 +391,13 @@ const CURL_CEILING: f32 = 0.80;
 
 /// Radians of winding per world unit — about one turn every 1.2 units.
 const CURL_RATE: f32 = 5.2;
-/// How far the helix rotates about its corridor per beat, in turns. Driven by
-/// the beat grid rather than by seconds, so the winding keeps time with the
-/// music instead of drifting against it — u.music.z counts beats and only ever
-/// increases, so using it as an angle cannot jump.
-const CURL_TURNS_PER_BEAT: f32 = 0.25;
 
-/// A swell travelling down the string: how much of the radius it takes, how
-/// tightly it is wound along the corridor, and how many corridor-lengths it
-/// travels per beat. This is what makes the string look like it is carrying
-/// the music along its length rather than pulsing all at once.
-const PULSE_DEPTH: f32 = 0.55;
-const PULSE_RATE: f32 = 0.9;
-const PULSE_SPEED: f32 = 1.5;
+/// A swell travelling down the string: how tightly it is wound along the
+/// corridor, and how many corridor-lengths it travels per beat. This is what
+/// makes the string look like it is carrying the music along its length rather
+/// than pulsing all at once.
+const PULSE_RATE: f32 = 1.25;
+const PULSE_SPEED: f32 = 1.0;
 
 /// How far from either end of the corridor beads fade, in world units.
 ///
@@ -512,8 +506,9 @@ fn fractal_flow_bead(i: u32) -> vec4<f32> {
     let frame = flow_track(wrapped, string);
     let binormal = safe_direction(cross(frame.tangent, frame.normal), UP);
 
-    // How wide the helix is right now. A floor, so there is always a curl,
-    // plus what the music adds: the softened beat opens it on every hit
+    // How wide the audio offset is right now. Its near-zero resting radius
+    // leaves the traced corridor as a clean backbone; the music opens the
+    // corkscrew around it on a hit
     // (u.frame.z, not the raw pulse, which rises in a single frame and made
     // the string jitter rather than swell), and the bass holds it open through
     // a loud passage.
@@ -521,24 +516,25 @@ fn fractal_flow_bead(i: u32) -> vec4<f32> {
     // The swell travels: its phase runs along the corridor and advances with
     // the beat grid, so what the eye follows is a widening moving down the
     // string in time rather than the whole string breathing at once. Its own
-    // phase per string, so the three do not pulse together.
+    // phase per string, so the threads do not pulse together.
     let travel = wrapped * PULSE_RATE - u.music.z * 2.0 * PI * PULSE_SPEED + si * 2.1;
-    let pulse = 1.0 + sin(travel) * PULSE_DEPTH;
-    let drive = (u.frame.z * CURL_FROM_BEAT + u.audio.x * CURL_FROM_BASS) * pulse;
+    // One narrow energy packet crosses each string per beat. It is keyed to
+    // the audio beat clock, so it travels with the tune instead of making the
+    // entire bundle bounce in unison.
+    let beat_packet = pow(max(sin(travel), 0.0), 3.0) * u.frame.z;
+    // Spread the strings across the spectrum. Each keeps a distinct musical
+    // voice while the shared packet makes their motion read as one current.
+    let voice = band((1u + string * 5u) % 16u);
+    let drive = beat_packet * CURL_FROM_BEAT
+        + (u.audio.x * 0.45 + voice * 0.55) * CURL_FROM_BASS;
     // Everything above is a fraction of what the corridor has room for here.
     let radius = clamp(CURL_RADIUS + drive, 0.0, CURL_CEILING) * frame.clearance;
 
-    // The curl's winding phase comes from distance along the corridor, not
-    // from the bead's index — so the helix stands still in space and the beads
-    // travel along it, which is what reads as flow. Phase from the index
-    // instead would carry the whole helix with the string, and the curl would
-    // look painted on.
-    //
-    // On top of that the helix rotates about the corridor, by beats rather
-    // than seconds, so the winding turns in time with the music.
-    let phase = wrapped * CURL_RATE
-        + u.music.z * CURL_TURNS_PER_BEAT * 2.0 * PI
-        + si * 2.4;
+    // The corkscrew is fixed to distance along the backbone, not continuously
+    // spun as a whole. Audio changes its radius and gives the live packet a
+    // small twist, so the string stays directional instead of reading as a
+    // rotating spring.
+    let phase = wrapped * CURL_RATE + si * 2.4 + beat_packet * 0.45;
     let position = frame.position
         + (frame.normal * cos(phase) + binormal * sin(phase)) * radius;
 

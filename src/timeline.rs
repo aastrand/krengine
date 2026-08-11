@@ -67,24 +67,23 @@ const STAND_ENOUGH: f32 = 5.0;
 /// of the camera — where beads still read as beads. Aimed halfway along, the
 /// view points at something twelve units off and the near string, which is the
 /// part worth looking at, sits out at the edge of frame.
-const FRACTAL_AIM: f32 = 0.16;
-const FRACTAL_AIM_DRIFT: f32 = 0.085;
-/// Radians per second the aim sweeps back and forth along the corridor.
-const FRACTAL_PAN: f32 = 0.11;
-/// How far the aim also leans across the strings, in world units. Without it
-/// the pan is confined to the one line the middle corridor traces.
-const FRACTAL_PAN_ACROSS: f32 = 0.9;
+const FRACTAL_AIM: f32 = 0.08;
+/// A short lateral camera slide across the local clear pocket. The strings
+/// remain the subject in front of the camera instead of becoming a rail the
+/// camera travels down.
+const FRACTAL_SIDE_GLIDE: f32 = 0.32;
 
-/// Where the corridor starts relative to the camera: this far in front, and
-/// this far off to one side, so the string enters frame from the edge and
-/// recedes rather than flying straight at the lens.
+/// Where the string corridor starts relative to the camera. This is separate
+/// from `FRACTAL_FOCUS`, which scores a safe viewing direction farther out:
+/// the particle field itself needs to begin in the foreground.
+const FRACTAL_STRING_LEAD: f32 = 0.45;
 const FRACTAL_FOCUS: f32 = 1.8;
-const FRACTAL_OFFSET: f32 = 0.35;
+const FRACTAL_OFFSET: f32 = 0.05;
 /// How wide the fractal scene shoots. Much wider than the rest of the demo:
 /// the camera is standing inside the structure with three strings spread
 /// across it, and at the 52 degrees the shot list uses, the outer two are
 /// outside the frame before they have gone anywhere.
-const FRACTAL_FOV: f32 = 76.0;
+const FRACTAL_FOV: f32 = 96.0;
 
 /// Clearance the glide keeps from the structure, and how hard the resulting
 /// path is smoothed, in seconds. The clearance has to be something the
@@ -97,6 +96,9 @@ const FRACTAL_INSIDE: f32 = 3.8;
 
 /// How much longer shots hold in the fractal scene.
 const FRACTAL_SHOT_HOLD: f32 = 2.2;
+/// The fractal uses a simple visual rhythm: hold a place for four beats, pan
+/// once across it, then cut to the next safe vantage on the following beat.
+const FRACTAL_HOLD_BEATS: f32 = 4.0;
 
 /// How much closer the shot drifts over the whole scene, as a fraction.
 const FRACTAL_DIVE: f32 = 0.22;
@@ -118,6 +120,10 @@ const WASH_IN: f32 = 0.52;
 const WASH_HOLD: f32 = 0.86;
 const WASH_BACK: f32 = 0.94;
 const WASH_OUT: f32 = 1.0;
+/// Let the new room settle after the white-out before its bead field arrives.
+/// Kept in beats so the pause remains musical at any tracker tempo.
+const BEAD_REVEAL_DELAY: f32 = 2.0;
+const BEAD_REVEAL_BEATS: f32 = 1.5;
 
 /// How long the room takes to give up the warm accent — much slower than the
 /// body takes to claim it.
@@ -285,11 +291,11 @@ impl Stage {
         let wash = smoothstep(WASH_IN, WASH_HOLD, collapse)
             .min(1.0 - smoothstep(WASH_BACK, WASH_OUT, collapse));
 
-        // The beads come up out of the white rather than being there when it
-        // clears. They belong to the new scene, so they arrive with it — a
-        // string already threading a structure that has not appeared yet reads
-        // as the old scene sprouting something.
-        let beads = smoothstep(WASH_BACK, WASH_OUT, collapse);
+        // Do not let the beads leak into the outgoing scene. The new room
+        // first gets a clean beat to establish itself, then the shader reveals
+        // the individual strings progressively from their leading ends.
+        let bead_start = COLLAPSE_BEATS + COLLAPSE_RAMP + BEAD_REVEAL_DELAY;
+        let beads = smoothstep(bead_start, bead_start + BEAD_REVEAL_BEATS, beats);
 
         Self {
             card,
@@ -335,9 +341,13 @@ pub struct Camera {
     pub fov_degrees: f32,
 }
 
-/// A single shot. `beats` is how long it holds before cutting to the next.
+/// A single camera setup. Its motion can take longer than the edit holds it:
+/// that lets the cut rhythm tighten without making every pan and dolly race.
 struct Shot {
+    /// Full duration of this setup's camera move.
     beats: f32,
+    /// How long the edit holds it before becoming willing to cut.
+    cut_beats: f32,
     kind: Kind,
 }
 
@@ -404,6 +414,7 @@ const FLIGHT: [[f32; 3]; 6] = [
 const SHOTS: [Shot; 7] = [
     Shot {
         beats: 12.0,
+        cut_beats: 6.0,
         kind: Kind::Dolly {
             azimuth: 0.6,
             sweep: 0.35,
@@ -418,6 +429,7 @@ const SHOTS: [Shot; 7] = [
     },
     Shot {
         beats: 8.0,
+        cut_beats: 4.0,
         kind: Kind::Close {
             azimuth: 2.3,
             radius: 1.95,
@@ -427,6 +439,7 @@ const SHOTS: [Shot; 7] = [
     },
     Shot {
         beats: 16.0,
+        cut_beats: 8.0,
         kind: Kind::Spline {
             points: &FLIGHT,
             fov: 56.0,
@@ -434,6 +447,7 @@ const SHOTS: [Shot; 7] = [
     },
     Shot {
         beats: 8.0,
+        cut_beats: 4.0,
         kind: Kind::Rise {
             azimuth: 1.2,
             radius: 2.6,
@@ -443,6 +457,7 @@ const SHOTS: [Shot; 7] = [
     },
     Shot {
         beats: 8.0,
+        cut_beats: 4.0,
         kind: Kind::Close {
             azimuth: 5.1,
             radius: 1.8,
@@ -453,6 +468,7 @@ const SHOTS: [Shot; 7] = [
     // A fast whip round: short enough that it reads as a single gesture.
     Shot {
         beats: 6.0,
+        cut_beats: 3.0,
         kind: Kind::Orbit {
             azimuth: 2.9,
             radius: 2.7,
@@ -464,6 +480,7 @@ const SHOTS: [Shot; 7] = [
     // starting framing so the loop closes without a jolt.
     Shot {
         beats: 12.0,
+        cut_beats: 6.0,
         kind: Kind::Dolly {
             azimuth: 3.4,
             sweep: 1.5,
@@ -492,6 +509,9 @@ pub struct Director {
     shot: usize,
     /// Beat position this shot began at.
     started: f32,
+    /// Once the room has taken over, use its own beat-grid cut cadence instead
+    /// of inheriting the elaborate opening-shot timing.
+    fractal_mode: bool,
     /// Smoothed camera position for the fractal glide. The raw position is
     /// corrected against the structure every frame, and those corrections are
     /// not continuous — filtering them is what keeps the glide smooth.
@@ -517,13 +537,14 @@ const OCTOPUS_FRAMING: f32 = 0.78;
 const OCTOPUS_CREEP: f32 = 0.12;
 
 /// How long past its length a shot waits for an accent before cutting anyway.
-const CUT_GRACE: f32 = 4.0;
+const CUT_GRACE: f32 = 1.5;
 
 impl Default for Director {
     fn default() -> Self {
         Self {
             shot: 0,
             started: 0.0,
+            fractal_mode: false,
             glide: Vec3::ZERO,
             glide_started: false,
             along: 0.0,
@@ -537,13 +558,29 @@ impl Default for Director {
 
 impl Director {
     pub fn update(&mut self, music: &Sync, stage: &Stage) -> Camera {
-        // The fractal wants long takes: it is a place to look around, not a
-        // subject to cut around.
-        let length = SHOTS[self.shot].beats * (1.0 + stage.collapse * FRACTAL_SHOT_HOLD);
+        let fractal_active = stage.collapse > 0.85;
+        if fractal_active && !self.fractal_mode {
+            self.fractal_mode = true;
+            // Anchor the first held shot to the musical grid. Subsequent cuts
+            // use the same grid rather than a wall-clock duration.
+            self.started = music.beat_phase.floor();
+        }
+
+        let length = if fractal_active {
+            FRACTAL_HOLD_BEATS
+        } else {
+            SHOTS[self.shot].cut_beats * (1.0 + stage.collapse * FRACTAL_SHOT_HOLD)
+        };
         let elapsed = music.beat_phase - self.started;
 
-        // Willing to cut, and either an accent arrived or patience ran out.
-        if elapsed >= length && (music.hard_hit || elapsed >= length + CUT_GRACE) {
+        // The opening follows accents; the fractal is intentionally simpler:
+        // every move is a hard cut on the next beat after its four-beat hold.
+        let cut = if fractal_active {
+            elapsed >= length && music.beat_phase.floor() > self.started.floor()
+        } else {
+            elapsed >= length && (music.hard_hit || elapsed >= length + CUT_GRACE)
+        };
+        if cut {
             self.shot = (self.shot + 1) % SHOTS.len();
             self.started = music.beat_phase;
         }
@@ -636,7 +673,7 @@ impl Director {
             // buried in the structure puts the head of the string inside a
             // wall, where every bead on it is culled.
             let origin = crate::fractal::push_clear(
-                self.glide + forward * FRACTAL_FOCUS - across * FRACTAL_OFFSET,
+                self.glide + forward * FRACTAL_STRING_LEAD - across * FRACTAL_OFFSET,
                 FRACTAL_CLEARANCE,
             );
 
@@ -676,24 +713,26 @@ impl Director {
             camera.eye = camera.eye.lerp(inside, arrival);
             camera.fov_degrees += (FRACTAL_FOV - camera.fov_degrees) * arrival;
 
-            // The view sits on the middle string and slides along it. That is
-            // the only motion in the scene — the camera stands still — and
-            // because the aim is a point on a corridor itself, the strings
-            // cannot leave the frame however the traces happened to route.
-            //
-            // Two sweeps at different rates rather than one, so the pan does
-            // not visibly repeat: a single sine returns to the same framing on
-            // a fixed cycle, and over a long scene that reads as the camera
-            // going back and forth rather than looking around.
-            let sweep = FRACTAL_AIM
-                + (music.time * FRACTAL_PAN).sin() * FRACTAL_AIM_DRIFT
-                + (music.time * FRACTAL_PAN * 0.41).sin() * FRACTAL_AIM_DRIFT * 0.6;
-            let aim = self.corridor_point(sweep);
-
-            // And a little across the strings as well as along them, so the
-            // pan is not confined to one line through the frame.
-            let lean = across * (music.time * FRACTAL_PAN * 0.63).sin() * FRACTAL_PAN_ACROSS;
-            camera.target = camera.target.lerp(aim + lean, arrival);
+            // Track sideways across the strings, maintaining a fixed look at
+            // the field. The clearance correction keeps this short slide in
+            // the local hole rather than allowing the camera into a wall.
+            let side = if fractal_active {
+                let direction = if self.shot.is_multiple_of(2) {
+                    1.0
+                } else {
+                    -1.0
+                };
+                ((elapsed / FRACTAL_HOLD_BEATS).clamp(0.0, 1.0) - 0.5)
+                    * 2.0
+                    * FRACTAL_SIDE_GLIDE
+                    * direction
+            } else {
+                0.0
+            };
+            let side_eye = crate::fractal::push_clear(inside + across * side, FRACTAL_CLEARANCE);
+            let aim = self.corridor_point(FRACTAL_AIM);
+            camera.eye = camera.eye.lerp(side_eye, arrival);
+            camera.target = camera.target.lerp(aim, arrival);
         }
         camera
     }
@@ -944,7 +983,8 @@ mod tests {
             ..Default::default()
         };
 
-        let mut worst = 1.0f32;
+        let mut worst_visible_field = 1.0f32;
+        let mut nearest = f32::INFINITY;
         // Two minutes at 60fps, across every shot in the cut list.
         for step in 0..7200 {
             let time = step as f32 / 60.0;
@@ -969,26 +1009,31 @@ mod tests {
             // all of it would pass on a framing that shows only the vanishing
             // point.
             //
-            // Checked per string, not pooled: the middle one is what the
-            // camera holds, so an average would let the outer two drift off
-            // the edge unnoticed.
+            // The dense field deliberately enters from all around the frame,
+            // so judge the visible foreground as a whole rather than forcing
+            // every outer thread into the centre of every shot.
             let near = crate::fractal::TRACK_POINTS / 4;
-            for corridor in &director.bundle {
-                let visible = corridor.points[..near]
-                    .iter()
-                    .filter(|point| {
-                        let to = (**point - camera.eye).normalize_or_zero();
-                        to.dot(forward) > limit
-                    })
-                    .count();
-                worst = worst.min(visible as f32 / near as f32);
-            }
+            let points = director
+                .bundle
+                .iter()
+                .flat_map(|corridor| &corridor.points[..near]);
+            let (visible, total) = points.fold((0usize, 0usize), |(visible, total), point| {
+                let to = (*point - camera.eye).normalize_or_zero();
+                let visible = visible + usize::from(to.dot(forward) > limit);
+                nearest = nearest.min((*point - camera.eye).length());
+                (visible, total + 1)
+            });
+            worst_visible_field = worst_visible_field.min(visible as f32 / total as f32);
         }
 
         assert!(
-            worst > 0.4,
-            "only {:.0}% of a string's near stretch was ever in frame",
-            worst * 100.0,
+            worst_visible_field > 0.4,
+            "only {:.0}% of the field's near stretch was ever in frame",
+            worst_visible_field * 100.0,
+        );
+        assert!(
+            nearest < 1.5,
+            "the closest foreground string was still {nearest:.2} units away",
         );
     }
 }

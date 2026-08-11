@@ -37,10 +37,10 @@ const CARDS: [&str; 6] = [
 const RENDER_SCALE: u32 = 2;
 
 pub const PARTICLE_COUNT: u32 = 512;
-/// Beads in the fractal scene, split between the strings. At the spacing in
-/// common.wgsl this gives each about half the corridor's length — so a string
-/// reads as a cord with a head and a tail, rather than as a loop with no ends.
-const FRACTAL_BEADS: u32 = 180;
+/// Beads in the fractal scene, split between the strings. This keeps each of
+/// the twelve corridors visibly populated, filling the architecture with a
+/// field of threads rather than a small bundle.
+const FRACTAL_BEADS: u32 = 1152;
 
 /// Mirrors `Uniforms` in shaders/common.wgsl. Keep the field order in sync.
 #[repr(C)]
