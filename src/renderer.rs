@@ -73,6 +73,8 @@ struct Uniforms {
     lens: [f32; 4],
     /// (collapse, unused, unused, unused).
     collapse: [f32; 4],
+    /// (focus distance, aperture strength, unused, unused).
+    dof: [f32; 4],
     /// The traced corridor the bead string runs along, as world positions.
     track: [[f32; 4]; crate::fractal::STRINGS * crate::fractal::TRACK_POINTS],
     /// A perpendicular at each of those points, carried along the curve, for
@@ -147,6 +149,8 @@ pub struct Renderer {
     director: Director,
     spin: Spin,
     flow: Flow,
+    focus_distance: f32,
+    focus_initialized: bool,
 }
 
 impl Renderer {
@@ -200,7 +204,7 @@ impl Renderer {
         let fluid = FluidPass::new(device, &uniform_layout, &targets.depth);
         let bloom_targets =
             bloom.targets(device, &targets.hdr, gpu.config.width, gpu.config.height);
-        let hdr_bind_group = post.make_bind_group(device, &targets.hdr);
+        let hdr_bind_group = post.make_scene_bind_group(device, &targets.hdr, &targets.depth);
         let masks = fluid.mask_views();
         let mask_bind_groups = [
             post.make_bind_group(device, masks[0]),
@@ -224,6 +228,8 @@ impl Renderer {
             director: Director::default(),
             spin: Spin::default(),
             flow: Flow::default(),
+            focus_distance: 4.0,
+            focus_initialized: false,
         }
     }
 
@@ -236,7 +242,9 @@ impl Renderer {
             gpu.config.width,
             gpu.config.height,
         );
-        self.hdr_bind_group = self.post.make_bind_group(&gpu.device, &self.targets.hdr);
+        self.hdr_bind_group =
+            self.post
+                .make_scene_bind_group(&gpu.device, &self.targets.hdr, &self.targets.depth);
     }
 
     // Every one of these is a distinct thing the frame needs; bundling them
@@ -255,6 +263,8 @@ impl Renderer {
         flow: f32,
         along: f32,
         radius: f32,
+        focus_distance: f32,
+        dof_strength: f32,
     ) -> Uniforms {
         let time = music.time;
         let eye = shot.eye;
@@ -319,6 +329,7 @@ impl Renderer {
                 stage.lens_particles,
             ],
             collapse: [stage.collapse, stage.bleed, along, radius],
+            dof: [focus_distance, dof_strength, 0.0, 0.0],
             track,
             track_frame,
             motion: [stage.merge, spin.yaw, spin.tilt, stage.palette],
@@ -337,6 +348,45 @@ impl Renderer {
             PARTICLE_COUNT
         };
         let shot = self.director.update(music, &stage);
+
+        // The camera target is the subject selected by the director. A damped
+        // physical focus ring follows it: cuts initiate a pull instead of
+        // making the focal plane teleport with the camera.
+        let desired_focus = shot.focus_distance.clamp(0.35, 14.0);
+        let fractal_focus_locked = stage.collapse > 0.85 && stage.lens_field < 0.01;
+        if !self.focus_initialized || fractal_focus_locked {
+            // Fractal shots are hard cuts. Arrive with their strings already
+            // focused; watching the focal plane travel after every cut fought
+            // the scene's calm, architectural presentation.
+            self.focus_distance = desired_focus;
+            self.focus_initialized = true;
+        } else {
+            // Lens-to-lens pulls are slow enough to be read as an optical
+            // gesture. Earlier scenes retain the shorter, subtler response.
+            let focus_time = if stage.lens_field > 0.01 { 1.05 } else { 0.55 };
+            let focus_alpha = 1.0 - (-music.dt.max(0.0) / focus_time).exp();
+            self.focus_distance += (desired_focus - self.focus_distance) * focus_alpha;
+            if stage.collapse <= 0.85 && stage.lens_field <= 0.01 {
+                // On the blob and octopus, a lagging focus ring may sit in
+                // front of the subject but never behind its central surface.
+                // The latter reads as focusing on empty space through the
+                // translucent/reflective body—the distracting overshoot the
+                // camera should never perform.
+                self.focus_distance = self.focus_distance.min(desired_focus);
+            }
+        }
+        let dof_strength = if stage.lens_field > 0.01 {
+            1.16
+        } else if stage.collapse > 0.85 {
+            // The fractal is dense enough that selective focus reads as a
+            // generally blurry image. Keep its architecture and strings
+            // uniformly crisp; hard camera cuts provide its depth rhythm.
+            0.0
+        } else if stage.spike > 0.2 {
+            0.84
+        } else {
+            0.68
+        };
 
         let mut track = [[0.0f32; 4]; crate::fractal::STRINGS * crate::fractal::TRACK_POINTS];
         let mut track_frame = [[0.0f32; 4]; crate::fractal::STRINGS * crate::fractal::TRACK_POINTS];
@@ -371,6 +421,8 @@ impl Renderer {
             flow,
             self.director.along,
             self.director.radius,
+            self.focus_distance,
+            dof_strength,
         );
         gpu.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));

@@ -4,6 +4,7 @@ use crate::shader;
 pub struct PostPass {
     pipeline: wgpu::RenderPipeline,
     hdr_layout: wgpu::BindGroupLayout,
+    scene_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
 }
 
@@ -45,11 +46,43 @@ impl PostPass {
             ..Default::default()
         });
 
+        let scene_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("post scene layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("post layout"),
             bind_group_layouts: &[
                 Some(uniform_layout),
-                Some(&hdr_layout),
+                Some(&scene_layout),
                 Some(bloom_layout),
                 Some(&hdr_layout),
             ],
@@ -81,8 +114,35 @@ impl PostPass {
         Self {
             pipeline,
             hdr_layout,
+            scene_layout,
             sampler,
         }
+    }
+
+    pub fn make_scene_bind_group(
+        &self,
+        device: &wgpu::Device,
+        hdr: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("post scene bind group"),
+            layout: &self.scene_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(hdr),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(depth),
+                },
+            ],
+        })
     }
 
     pub fn make_bind_group(

@@ -133,6 +133,8 @@ const LENS_TRANSITION_BEATS: f32 = 8.0;
 /// One long flight through the lens field before its closed spline repeats.
 /// At 125 BPM this is about 46 seconds without a cut or visible reset.
 const LENS_FLIGHT_BEATS: f32 = 96.0;
+/// Hold one membrane in focus for two bars before pulling to another depth.
+const LENS_FOCUS_BEATS: f32 = 8.0;
 /// Space between the camera and the most deformed membrane. This is deliberately
 /// generous: the safety projection should be a last resort, not something that
 /// visibly reshapes the authored spline as the shot begins.
@@ -406,6 +408,8 @@ pub struct Camera {
     /// Camera up, allowing the lens flight to bank around its viewing axis.
     pub up: Vec3,
     pub fov_degrees: f32,
+    /// Distance to the visible subject surface, not merely its look-at point.
+    pub focus_distance: f32,
 }
 
 /// A single camera setup. Its motion can take longer than the edit holds it:
@@ -588,6 +592,10 @@ pub struct Director {
     /// a spatial average alone becomes ill-conditioned and flips direction.
     lens_forward: Vec3,
     lens_view_started: bool,
+    /// Identity is held for the whole phrase so deformation and changing
+    /// visibility cannot trigger unscheduled autofocus changes.
+    lens_focus_phrase: usize,
+    lens_focus_index: usize,
     /// Where the camera is along the path, and at what radius, so the beads
     /// can be strung along the same corridor rather than their own.
     pub along: f32,
@@ -620,6 +628,8 @@ impl Default for Director {
             glide_started: false,
             lens_forward: Vec3::ZERO,
             lens_view_started: false,
+            lens_focus_phrase: usize::MAX,
+            lens_focus_index: 0,
             along: 0.0,
             radius: FRACTAL_INSIDE,
             placed_for: usize::MAX,
@@ -806,6 +816,7 @@ impl Director {
             let aim = self.corridor_point(FRACTAL_AIM);
             camera.eye = camera.eye.lerp(side_eye, arrival);
             camera.target = camera.target.lerp(aim, arrival);
+            camera.focus_distance = camera.eye.distance(camera.target);
         }
 
         // The expanding membrane covers this handoff. By the time it clears,
@@ -821,6 +832,16 @@ impl Director {
                     stabilize_lens_view(lens.eye, self.lens_forward, desired, music);
             }
             lens.target = lens.eye + self.lens_forward * 4.0;
+            let since = (music.beat_phase - LENS_BEATS - LENS_TRANSITION_BEATS).max(0.0);
+            let focus_phrase = (since / LENS_FOCUS_BEATS).floor() as usize;
+            if focus_phrase != self.lens_focus_phrase
+                || !lens_is_visible(lens.eye, self.lens_forward, self.lens_focus_index, music)
+            {
+                self.lens_focus_index =
+                    choose_lens_focus(lens.eye, self.lens_forward, music, focus_phrase);
+                self.lens_focus_phrase = focus_phrase;
+            }
+            lens.focus_distance = lens_focus_distance(lens.eye, self.lens_focus_index);
             // The membrane is opaque around the midpoint, so make the camera
             // handoff there. Blending it throughout the visible wipe made the
             // outgoing fractal slide and warp before it was covered.
@@ -829,6 +850,7 @@ impl Director {
             camera.target = camera.target.lerp(lens.target, handoff);
             camera.up = camera.up.lerp(lens.up, handoff).normalize_or_zero();
             camera.fov_degrees += (lens.fov_degrees - camera.fov_degrees) * handoff;
+            camera.focus_distance += (lens.focus_distance - camera.focus_distance) * handoff;
         }
         camera
     }
@@ -882,7 +904,80 @@ fn lens_camera(music: &Sync) -> Camera {
         target,
         up: up.normalize_or_zero(),
         fov_degrees: LENS_FOV_DEGREES,
+        focus_distance: 4.0,
     }
+}
+
+/// Pick one comfortably framed membrane at the start of a focus phrase.
+/// Candidates are ordered near, far, second-near, second-far, so successive
+/// pulls traverse an unmistakable amount of depth instead of landing on two
+/// lenses that happen to be almost coplanar.
+fn choose_lens_focus(eye: Vec3, forward: Vec3, music: &Sync, phrase: usize) -> usize {
+    let half_fov = (LENS_FOV_DEGREES * 0.5).to_radians();
+    let mut safe = Vec::with_capacity(LENS_CENTERS.len());
+    let mut onscreen = Vec::with_capacity(LENS_CENTERS.len());
+    let mut fallback = (0usize, f32::INFINITY);
+    for i in 0..LENS_CENTERS.len() {
+        let center = animated_lens_center(i, music);
+        let delta = center - eye;
+        let distance = delta.length().max(1.0e-4);
+        let direction = delta / distance;
+        let facing = forward.dot(direction).clamp(-1.0, 1.0);
+        if facing <= 0.0 {
+            continue;
+        }
+        let direction = (eye - center).normalize_or_zero();
+        let radius = animated_lens_radius(direction, i, music);
+        let surface_distance = (distance - radius).max(0.35);
+        let angle = facing.acos();
+        let angular_radius = (radius / distance).clamp(0.0, 0.999).asin();
+        if angle <= half_fov + angular_radius {
+            onscreen.push((i, surface_distance));
+        }
+        // Keep the selected subject away from the edge so the pull is always
+        // readable as landing on something, not on an object leaving frame.
+        if angle + angular_radius * 0.35 < half_fov * 0.88 {
+            safe.push((i, surface_distance));
+        }
+        if angle < fallback.1 {
+            fallback = (i, angle);
+        }
+    }
+
+    let visible = if safe.is_empty() {
+        &mut onscreen
+    } else {
+        &mut safe
+    };
+    if visible.is_empty() {
+        return fallback.0;
+    }
+    visible.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let rank = phrase % visible.len();
+    let slot = if rank.is_multiple_of(2) {
+        rank / 2
+    } else {
+        visible.len() - 1 - rank / 2
+    };
+    visible[slot].0
+}
+
+fn lens_is_visible(eye: Vec3, forward: Vec3, lens: usize, music: &Sync) -> bool {
+    let center = animated_lens_center(lens, music);
+    let delta = center - eye;
+    let distance = delta.length().max(1.0e-4);
+    let direction = delta / distance;
+    let radius = animated_lens_radius(-direction, lens, music);
+    let angular_radius = (radius / distance).clamp(0.0, 0.999).asin();
+    let angle = forward.dot(direction).clamp(-1.0, 1.0).acos();
+    angle <= (LENS_FOV_DEGREES * 0.5).to_radians() + angular_radius
+}
+
+/// Stable nominal front-surface distance for the chosen membrane. Audio still
+/// morphs its rendering, but cannot make the focus ring breathe between the
+/// scheduled lens-to-lens pulls.
+fn lens_focus_distance(eye: Vec3, lens: usize) -> f32 {
+    (eye.distance(LENS_CENTERS[lens]) - LENS_RADII[lens]).max(0.35)
 }
 
 /// Catmull-Rom's parameter is not distance: using it directly makes the camera
@@ -1175,11 +1270,18 @@ impl Camera {
         let closer = 1.0 + (OCTOPUS_FRAMING - 1.0) * octopus;
         let creep = 1.0 - ease(t) * OCTOPUS_CREEP * octopus;
 
+        let eye = eye * recoil * closer * creep;
         Self {
-            eye: eye * recoil * closer * creep,
+            eye,
             target,
             up: Vec3::Y,
             fov_degrees: fov,
+            // The opening and ferrofluid subjects are centred implicit
+            // surfaces. Focus on their front skin instead of their centre.
+            // Aim at the middle of the visible body. As the blobs gather into
+            // the larger octopus form its central silhouette grows, so its
+            // front surface sits farther ahead of the look-at point.
+            focus_distance: (eye.distance(target) - (0.62 + octopus * 0.26)).max(0.35),
         }
     }
 }
@@ -1396,6 +1498,31 @@ mod tests {
             "lens framing snapped by {:.1} degrees at step {largest_turn_step}",
             largest_turn.to_degrees(),
         );
+    }
+
+    #[test]
+    fn focused_lens_stays_visible_for_the_whole_flight() {
+        let mut director = Director::default();
+        for step in 0..2400 {
+            let phase = step as f32 / 2400.0;
+            let beat_phase = LENS_BEATS + LENS_TRANSITION_BEATS + phase * LENS_FLIGHT_BEATS;
+            let music = Sync {
+                time: beat_phase * 0.48,
+                beat_phase,
+                dt: LENS_FLIGHT_BEATS * 0.48 / 2400.0,
+                low: 0.75 + (phase * 31.0).sin() * 0.65,
+                mid: 0.70 + (phase * 47.0).cos() * 0.60,
+                ..Default::default()
+            };
+            let stage = Stage::at(&music);
+            let camera = director.update(&music, &stage);
+            let forward = (camera.target - camera.eye).normalize_or_zero();
+            assert!(
+                lens_is_visible(camera.eye, forward, director.lens_focus_index, &music,),
+                "step {step}: focused lens {} left the frame",
+                director.lens_focus_index,
+            );
+        }
     }
 
     /// The whole point of the fractal scene: the string of beads is the

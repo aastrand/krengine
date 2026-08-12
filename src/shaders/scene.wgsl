@@ -549,7 +549,15 @@ fn fs_main(in: FullscreenOut) -> SceneOut {
     }
 
     let hit = ro + rd * t;
-    out.color = vec4<f32>(shade_inner(hit, rd) * fade, 1.0);
+    // During the opening cards the body stays entirely black. Only its merge
+    // seams are allowed through as a narrow orange HDR signal; bloom turns
+    // that signal into the faint glow that originally appeared by accident.
+    let title_presence = intro_title_presence();
+    let title_seam = pow(inner_field(hit).y, 3.2) * title_presence;
+    let title_vein = mix(VEIN_COLOR, VEIN_CORE, title_seam * 0.45)
+        * title_seam
+        * (0.72 + u.audio.w * 0.18);
+    out.color = vec4<f32>(shade_inner(hit, rd) * fade + title_vein, 1.0);
     out.depth = clip_depth(hit);
     return out;
 }

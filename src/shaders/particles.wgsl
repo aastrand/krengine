@@ -134,3 +134,18 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let presence = max(1.0 - u.scene.x, in.scene) * in.visible * arrived;
     return vec4<f32>(in.tint, smoothstep(1.0, 0.55, r) * 0.92 * u.intro.z * presence);
 }
+
+/// Invisible central depth for the non-occluding particle pass. The broad,
+/// soft bead remains alpha blended, but its solid centre tells post-processing
+/// where the string actually is instead of exposing the wall or far plane
+/// behind it to depth of field.
+@fragment
+fn fs_focus_depth(in: VsOut) -> @location(0) vec4<f32> {
+    let r = length(in.local);
+    let arrived = mix(1.0, in.arrival, in.scene);
+    let presence = max(1.0 - u.scene.x, in.scene) * in.visible * arrived;
+    if r > 0.52 || presence < 0.08 {
+        discard;
+    }
+    return vec4<f32>(0.0);
+}

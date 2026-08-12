@@ -32,6 +32,9 @@ struct Uniforms {
     /// Room collapse: (amount, bleed, camera's position along the path, the
     /// radius it is gliding at).
     collapse: vec4<f32>,
+    /// Cinematic depth of field: (focus distance, aperture strength, unused,
+    /// unused). Distance is measured from the camera in world units.
+    dof: vec4<f32>,
     /// The traced corridors the bead strings run along, laid end to end:
     /// STRINGS * TRACK_POINTS entries. Both counts must match fractal.rs — see
     /// the uniform_arrays_match_the_cpu test in shader.rs.
@@ -45,6 +48,14 @@ struct Uniforms {
 // Spectrum band `i` (0 = ~40Hz, 15 = ~16kHz).
 fn band(i: u32) -> f32 {
     return u.bands[i / 4u][i % 4u];
+}
+
+/// Opening titles get a deliberately dim glimpse of the vein network behind
+/// them. Credits use the same card machinery later, so explicitly exclude
+/// their indices rather than keying this only on card opacity.
+fn intro_title_presence() -> f32 {
+    let opening_card = step(-0.5, u.intro.x) * (1.0 - step(2.5, u.intro.x));
+    return opening_card * smoothstep(0.06, 0.62, u.intro.y);
 }
 
 const PI: f32 = 3.14159265;

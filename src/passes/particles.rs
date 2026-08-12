@@ -8,6 +8,9 @@ pub struct ParticlePass {
     occluding: wgpu::RenderPipeline,
     /// Does not, for the fractal, where the beads overlap each other.
     blending: wgpu::RenderPipeline,
+    /// Writes only a small central depth core after the blended pass, allowing
+    /// depth of field to focus the string without clipping its soft edges.
+    focus_depth: wgpu::RenderPipeline,
 }
 
 impl ParticlePass {
@@ -94,10 +97,42 @@ impl ParticlePass {
 
         let occluding = make("beads over smoke", true);
         let blending = make("beads on a string", false);
+        let focus_depth = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("bead focus depth"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs_focus_depth"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: HDR_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::empty(),
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
 
         Self {
             occluding,
             blending,
+            focus_depth,
         }
     }
 
@@ -144,5 +179,9 @@ impl ParticlePass {
         });
         pass.set_bind_group(0, uniforms, &[]);
         pass.draw(0..6, 0..count);
+        if !over_smoke {
+            pass.set_pipeline(&self.focus_depth);
+            pass.draw(0..6, 0..count);
+        }
     }
 }

@@ -3,6 +3,7 @@
 
 @group(1) @binding(0) var hdr_tex: texture_2d<f32>;
 @group(1) @binding(1) var hdr_sampler: sampler;
+@group(1) @binding(2) var depth_tex: texture_depth_2d;
 @group(2) @binding(0) var bloom_tex: texture_2d<f32>;
 @group(2) @binding(1) var bloom_sampler: sampler;
 @group(3) @binding(0) var mask_tex: texture_2d<f32>;
@@ -21,6 +22,27 @@ const BLOOM_STRENGTH: f32 = 0.55;
 const VIGNETTE_START: f32 = 0.52;
 const VIGNETTE_STRENGTH: f32 = 0.68;
 
+/// Maximum blur radius at output resolution. The HDR source is 2x larger, so
+/// its linear sampler still gives this gather clean sub-pixel information.
+const DOF_MAX_RADIUS: f32 = 17.0;
+/// Concentric aperture samples: a small inner disc and an eight-sided outer
+/// ring. Bright defocused points therefore spread into a readable bokeh shape
+/// instead of the directionless softness of a box or gaussian blur.
+const DOF_TAPS: array<vec2<f32>, 12> = array<vec2<f32>, 12>(
+    vec2<f32>(0.34, 0.0),
+    vec2<f32>(0.0, 0.34),
+    vec2<f32>(-0.34, 0.0),
+    vec2<f32>(0.0, -0.34),
+    vec2<f32>(1.0, 0.0),
+    vec2<f32>(0.707, 0.707),
+    vec2<f32>(0.0, 1.0),
+    vec2<f32>(-0.707, 0.707),
+    vec2<f32>(-1.0, 0.0),
+    vec2<f32>(-0.707, -0.707),
+    vec2<f32>(0.0, -1.0),
+    vec2<f32>(0.707, -0.707),
+);
+
 
 // Narkowicz ACES approximation.
 fn tonemap(x: vec3<f32>) -> vec3<f32> {
@@ -30,6 +52,71 @@ fn tonemap(x: vec3<f32>) -> vec3<f32> {
     let d = 0.59;
     let e = 0.14;
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+fn depth_at(uv: vec2<f32>) -> f32 {
+    let dimensions = textureDimensions(depth_tex);
+    let size = vec2<i32>(dimensions);
+    let pixel = clamp(vec2<i32>(floor(uv * vec2<f32>(dimensions))), vec2<i32>(0), size - 1);
+    return textureLoad(depth_tex, pixel, 0);
+}
+
+fn world_distance(uv: vec2<f32>, depth: f32) -> f32 {
+    let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    let world_h = u.inv_view_proj * vec4<f32>(ndc, depth, 1.0);
+    let world = world_h.xyz / max(abs(world_h.w), 1.0e-5);
+    return distance(world, u.camera_pos.xyz);
+}
+
+fn circle_of_confusion(distance_from_camera: f32, strength: f32) -> f32 {
+    let relative = abs(distance_from_camera - u.dof.x)
+        / max(distance_from_camera, u.dof.x * 0.45);
+    return smoothstep(0.025, 0.30, relative) * strength;
+}
+
+/// Small depth-aware bokeh gather. Samples across a disc rather than a square,
+/// and prevents far pixels from flooding sharply focused foreground edges.
+fn depth_of_field(uv: vec2<f32>) -> vec3<f32> {
+    let center_depth = depth_at(uv);
+    let center_distance = world_distance(uv, center_depth);
+    let transition_blur = 4.0 * u.lens.y * (1.0 - u.lens.y);
+    // Text is part of the HDR target, so yield while a card is visible. It
+    // remains typeset-sharp instead of inheriting the scene's focal plane.
+    let strength = max(u.dof.y, transition_blur) * (1.0 - clamp(u.intro.y, 0.0, 1.0));
+    let center_coc = circle_of_confusion(center_distance, strength);
+    if center_coc < 0.015 {
+        return textureSample(hdr_tex, hdr_sampler, uv).rgb;
+    }
+
+    let texel = 1.0 / max(u.resolution, vec2<f32>(1.0));
+    var color = textureSample(hdr_tex, hdr_sampler, uv).rgb;
+    var weight_sum = 1.0;
+    for (var i = 0u; i < 12u; i = i + 1u) {
+        let sample_uv = clamp(
+            uv + DOF_TAPS[i] * texel * DOF_MAX_RADIUS * center_coc,
+            vec2<f32>(0.0),
+            vec2<f32>(1.0),
+        );
+        let sample_distance = world_distance(sample_uv, depth_at(sample_uv));
+        let sample_coc = circle_of_confusion(sample_distance, strength);
+        // An out-of-focus neighbour contributes naturally. A sharply focused
+        // neighbour is retained only when it lies close to the centre depth,
+        // avoiding bright background halos across a foreground silhouette.
+        let same_plane = 1.0 - smoothstep(
+            0.04,
+            0.35,
+            abs(sample_distance - center_distance) / max(center_distance, 0.2),
+        );
+        let weight = 0.20 + max(sample_coc, same_plane) * 0.80;
+        let sample_color = textureSample(hdr_tex, hdr_sampler, sample_uv).rgb;
+        let brightness = max(sample_color.r, max(sample_color.g, sample_color.b));
+        // Preserve energy from isolated HDR highlights across the aperture.
+        // Bloom then rounds these sparse copies into pearl/orange bokeh discs.
+        let bokeh = max(brightness - 0.72, 0.0) * sample_coc * 0.32;
+        color += sample_color * weight * (1.0 + bokeh);
+        weight_sum += weight;
+    }
+    return color / weight_sum;
 }
 
 // Debug overlay: the 16 FFT bands as bars, so a band can be picked by eye.
@@ -97,7 +184,7 @@ fn fs_main(in: FullscreenOut) -> @location(0) vec4<f32> {
 
     // The scene target is supersampled, so a single linear tap here averages
     // the extra samples — that's the anti-aliasing.
-    var color = textureSample(hdr_tex, hdr_sampler, uv).rgb;
+    var color = depth_of_field(uv);
 
     // Bloom is added before tonemapping, so highlights roll off together with
     // everything else rather than clipping to white.
