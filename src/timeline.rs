@@ -353,7 +353,7 @@ impl Stage {
             beats,
         );
         let lens_particles = smoothstep(
-            LENS_BEATS + LENS_SEAL_BEATS,
+            LENS_BEATS + LENS_SEAL_BEATS + (LENS_TRANSITION_BEATS - LENS_SEAL_BEATS) * 0.62,
             LENS_BEATS + LENS_TRANSITION_BEATS + 2.0,
             beats,
         );
@@ -821,13 +821,14 @@ impl Director {
                     stabilize_lens_view(lens.eye, self.lens_forward, desired, music);
             }
             lens.target = lens.eye + self.lens_forward * 4.0;
-            camera.eye = camera.eye.lerp(lens.eye, stage.lens_cross);
-            camera.target = camera.target.lerp(lens.target, stage.lens_cross);
-            camera.up = camera
-                .up
-                .lerp(lens.up, stage.lens_cross)
-                .normalize_or_zero();
-            camera.fov_degrees += (lens.fov_degrees - camera.fov_degrees) * stage.lens_cross;
+            // The membrane is opaque around the midpoint, so make the camera
+            // handoff there. Blending it throughout the visible wipe made the
+            // outgoing fractal slide and warp before it was covered.
+            let handoff = smoothstep(0.46, 0.54, stage.lens_cross);
+            camera.eye = camera.eye.lerp(lens.eye, handoff);
+            camera.target = camera.target.lerp(lens.target, handoff);
+            camera.up = camera.up.lerp(lens.up, handoff).normalize_or_zero();
+            camera.fov_degrees += (lens.fov_degrees - camera.fov_degrees) * handoff;
         }
         camera
     }

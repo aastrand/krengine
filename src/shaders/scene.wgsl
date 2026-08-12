@@ -488,32 +488,49 @@ fn fs_main(in: FullscreenOut) -> SceneOut {
             return out;
         }
 
-        // One circular aperture seals over the fractal. It first bends the old
-        // room, then expands across the camera while revealing the new field
-        // inside the same physical boundary.
+        // One circular aperture seals over the fractal, closes over the whole
+        // frame, then opens onto the lens field. The scene and camera swap at
+        // the fully opaque midpoint; neither is cross-faded while visible.
         let aspect = u.resolution.x / max(u.resolution.y, 1.0);
         let membrane_center = vec2<f32>(0.13, -0.04);
         let q = vec2<f32>((in.uv.x - membrane_center.x) * aspect, in.uv.y - membrane_center.y);
         let radial = length(q);
-        let radius = 0.58 + u.lens.y * 1.75;
-        let inside = 1.0 - smoothstep(radius - 0.025, radius + 0.025, radial);
+        let closing = clamp(u.lens.y * 2.0, 0.0, 1.0);
+        let opening = clamp((u.lens.y - 0.5) * 2.0, 0.0, 1.0);
+        let close_radius = mix(0.58, 2.45, closing * closing * (3.0 - 2.0 * closing));
+        let open_radius = mix(0.0, 2.45, opening * opening * (3.0 - 2.0 * opening));
+        let closed_disc = 1.0 - smoothstep(close_radius - 0.035, close_radius + 0.035, radial);
+        let unrevealed = smoothstep(open_radius - 0.035, open_radius + 0.035, radial);
 
         var sample_uv = in.uv;
-        if inside > 0.0 && radial > 1.0e-4 {
-            let bend = (1.0 - clamp(radial / radius, 0.0, 1.0))
-                * u.lens.x * (1.0 - u.lens.z) * 0.12;
+        if closed_disc > 0.0 && radial > 1.0e-4 {
+            let bend = (1.0 - clamp(radial / max(close_radius, 0.01), 0.0, 1.0))
+                * u.lens.x * (1.0 - closing) * 0.10;
             sample_uv = sample_uv + vec2<f32>(q.x / aspect, q.y) / radial * bend;
         }
         let old = render_fractal_scene(ro, camera_ray(sample_uv));
         let lenses = render_lens_scene(ro, rd);
-        let reveal = inside * u.lens.z;
-        out.color = vec4<f32>(mix(old.color, lenses.color, reveal) * fade, 1.0);
-        out.depth = select(old.depth, lenses.depth, reveal > 0.5);
+        let film = mix(LENS_SHADOW, LENS_IVORY, 0.72)
+            + LENS_PEACH * (0.08 + u.audio.z * 0.08);
 
-        // Peach interference along the sealing edge makes it read as a film,
-        // rather than as a circular crossfade painted over the frame.
-        let rim = exp(-abs(radial - radius) * 85.0) * u.lens.x * (1.0 - u.lens.z * 0.65);
-        out.color = vec4<f32>(out.color.rgb + LENS_PEACH * rim * (0.55 + u.audio.z * 0.45), 1.0);
+        var color: vec3<f32>;
+        if u.lens.y < 0.5 {
+            // The sealed aperture begins as refracted fractal and gains body
+            // only as it closes, so it reads as one membrane approaching.
+            color = mix(old.color, film, closed_disc * closing);
+            out.depth = old.depth;
+        } else {
+            // At the midpoint `unrevealed` covers the complete frame. The new
+            // room then opens inside-out without ever sharing visible pixels
+            // with the old camera.
+            color = mix(lenses.color, film, unrevealed);
+            out.depth = select(lenses.depth, 1.0, unrevealed > 0.5);
+        }
+
+        let edge_radius = select(close_radius, open_radius, u.lens.y >= 0.5);
+        let rim = exp(-abs(radial - edge_radius) * 72.0) * u.lens.x;
+        color = color + LENS_PEACH * rim * (0.38 + u.audio.z * 0.24);
+        out.color = vec4<f32>(color * fade, 1.0);
         return out;
     }
 

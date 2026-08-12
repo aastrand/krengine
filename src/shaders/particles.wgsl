@@ -20,6 +20,8 @@ const QUAD: array<vec2<f32>, 6> = array<vec2<f32>, 6>(
     vec2<f32>(-1.0, 1.0),
 );
 
+const LENS_SATELLITE_COUNT: u32 = 420u;
+
 fn lens_satellite_pos(i: u32) -> vec3<f32> {
     let lens = i % LENS_COUNT;
     let slot = i / LENS_COUNT;
@@ -62,21 +64,17 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
         center = mix(center, bead.xyz, fractal_scene);
         visible = mix(1.0, bead.w, fractal_scene);
 
-        // The strings gather on the sealing aperture, then detach into sparse
-        // satellites around the living lenses. Keeping the intermediate ring
-        // in camera space makes it coincide with the visible membrane.
-        let forward = camera_ray(vec2<f32>(0.0));
-        let angle = f32(ii) * 2.399963;
-        let ring_radius = 1.28 + f32(ii % STRINGS) * 0.012;
-        let ring = u.camera_pos.xyz + forward * 2.35
-            + u.camera_right.xyz * cos(angle) * ring_radius
-            + u.camera_up.xyz * sin(angle) * ring_radius;
-        center = mix(center, ring, u.lens.x * (1.0 - u.lens.w));
-        center = mix(center, lens_satellite_pos(ii), u.lens.w);
-        if u.lens.w > 0.0 {
+        // The opaque membrane owns the handoff. Fade the strings before it
+        // covers the frame, swap their positions while hidden, then introduce
+        // only the sparse satellite set after the new room is revealed. The
+        // former camera-space ring made the transition look like a HUD effect.
+        if u.lens.y < 0.5 {
+            visible = visible * (1.0 - smoothstep(0.06, 0.42, u.lens.y));
+        } else {
+            center = lens_satellite_pos(ii);
             center = clear_of_lenses(center);
+            visible = step(f32(ii), f32(LENS_SATELLITE_COUNT - 1u)) * u.lens.w;
         }
-        visible = mix(visible, 1.0, u.lens.w);
     }
     if u.debug.y > 0.5 {
         let forward = camera_ray(vec2<f32>(0.0, 0.0));
