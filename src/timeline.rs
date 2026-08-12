@@ -135,6 +135,11 @@ const LENS_TRANSITION_BEATS: f32 = 8.0;
 const LENS_FLIGHT_BEATS: f32 = 96.0;
 /// Hold one membrane in focus for two bars before pulling to another depth.
 const LENS_FOCUS_BEATS: f32 = 8.0;
+/// The lens field holds for twelve bars, then one membrane liquefies into the
+/// tunnel entrance. Eight beats leave time for a covered camera handoff.
+const TUNNEL_BEATS: f32 = LENS_BEATS + LENS_TRANSITION_BEATS + 48.0;
+const TUNNEL_TRANSITION_BEATS: f32 = 8.0;
+const TUNNEL_TENTACLE_BEATS: f32 = 16.0;
 /// Space between the camera and the most deformed membrane. This is deliberately
 /// generous: the safety projection should be a last resort, not something that
 /// visibly reshapes the authored spline as the shot begins.
@@ -234,6 +239,14 @@ pub struct Stage {
     pub lens_field: f32,
     /// Bead strings releasing into free satellites around the lenses.
     pub lens_particles: f32,
+    /// Lens membrane flooding the frame and stretching into a tunnel mouth.
+    pub tunnel_cross: f32,
+    /// How completely the tunnel has replaced the lens field.
+    pub tunnel_field: f32,
+    /// Staggered growth of the wall-to-wall liquid-metal tentacles.
+    pub tunnel_tentacles: f32,
+    /// Beats since the camera began its forward tunnel march.
+    pub tunnel_travel: f32,
     /// The room's palette shift, on its own slower ramp than the body's. A
     /// background caught changing draws attention to itself; the point is that
     /// it has receded, not that it receded just now.
@@ -359,6 +372,18 @@ impl Stage {
             LENS_BEATS + LENS_TRANSITION_BEATS + 2.0,
             beats,
         );
+        let tunnel_cross = smoothstep(TUNNEL_BEATS, TUNNEL_BEATS + TUNNEL_TRANSITION_BEATS, beats);
+        let tunnel_field = smoothstep(
+            TUNNEL_BEATS + TUNNEL_TRANSITION_BEATS * 0.45,
+            TUNNEL_BEATS + TUNNEL_TRANSITION_BEATS,
+            beats,
+        );
+        let tunnel_tentacles = smoothstep(
+            TUNNEL_BEATS + TUNNEL_TRANSITION_BEATS,
+            TUNNEL_BEATS + TUNNEL_TRANSITION_BEATS + TUNNEL_TENTACLE_BEATS,
+            beats,
+        );
+        let tunnel_travel = (beats - TUNNEL_BEATS - TUNNEL_TRANSITION_BEATS).max(0.0);
 
         Self {
             card,
@@ -372,6 +397,10 @@ impl Stage {
             lens_cross,
             lens_field,
             lens_particles,
+            tunnel_cross,
+            tunnel_field,
+            tunnel_tentacles,
+            tunnel_travel,
             bleed,
             dive: smoothstep(COLLAPSE_BEATS, COLLAPSE_BEATS + 160.0, beats),
             smoke,
@@ -852,6 +881,17 @@ impl Director {
             camera.fov_degrees += (lens.fov_degrees - camera.fov_degrees) * handoff;
             camera.focus_distance += (lens.focus_distance - camera.focus_distance) * handoff;
         }
+        if stage.tunnel_cross > 0.0 {
+            let tunnel = tunnel_camera(music);
+            // The liquid membrane is fully opaque across this narrow handoff,
+            // so the lens flight never visibly interpolates into the tunnel.
+            let handoff = smoothstep(0.46, 0.54, stage.tunnel_cross);
+            camera.eye = camera.eye.lerp(tunnel.eye, handoff);
+            camera.target = camera.target.lerp(tunnel.target, handoff);
+            camera.up = camera.up.lerp(tunnel.up, handoff).normalize_or_zero();
+            camera.fov_degrees += (tunnel.fov_degrees - camera.fov_degrees) * handoff;
+            camera.focus_distance += (tunnel.focus_distance - camera.focus_distance) * handoff;
+        }
         camera
     }
 
@@ -875,6 +915,53 @@ impl Director {
             .map(|c| c.points[index].lerp(c.points[index + 1], f))
             .sum();
         sum / crate::fractal::STRINGS as f32
+    }
+}
+
+/// A steady forward march down the tunnel. Broad lateral drift keeps the wall
+/// relief moving in parallax; a restrained roll makes the bore feel endless
+/// without turning the camera into another orbit shot.
+fn tunnel_camera(music: &Sync) -> Camera {
+    let since = (music.beat_phase - TUNNEL_BEATS - TUNNEL_TRANSITION_BEATS).max(0.0);
+    let travel = since * 0.48;
+    let tunnel_center = |z: f32| Vec3::new((z * 0.24).sin() * 0.38, (z * 0.19).cos() * 0.30, z);
+    let eye = tunnel_center(-travel);
+    let target = tunnel_center(-travel - 4.0);
+    let forward = (target - eye).normalize_or_zero();
+    // Follow the tunnel's rotating three-lobed cross-section rather than
+    // banking independently of it.
+    let roll = -travel * 0.18 + (-travel * 0.12).sin() * 0.38;
+    let world_up = Vec3::Y;
+    let up = world_up * roll.cos()
+        + forward.cross(world_up) * roll.sin()
+        + forward * forward.dot(world_up) * (1.0 - roll.cos());
+
+    // Rack toward the nearest tentacle while it is pushing out of the wall.
+    // The gate timing mirrors scene.wgsl; keeping this authored instead of
+    // sampling scene depth prevents the reflective wall from stealing focus.
+    let spacing = 5.2;
+    let first_gate = (travel / spacing).floor() + 1.0;
+    let mut focus_distance = 3.8;
+    let mut best_entrance = 0.0;
+    for i in 0..3 {
+        let fi = i as f32;
+        let cycle = ((since + fi * 1.65) / 8.0).fract();
+        let entrance = smoothstep(0.02, 0.16, cycle) * (1.0 - smoothstep(0.30, 0.52, cycle))
+            / (1.0 + fi * 0.35);
+        if entrance > best_entrance {
+            let gate_z = -(first_gate + fi) * spacing - 0.48;
+            // Tentacles cross close to the bore centre; include their small
+            // lateral offset and ignore entrances too near the lens to frame.
+            focus_distance = ((eye.z - gate_z).powi(2) + 0.55).sqrt().clamp(2.0, 7.0);
+            best_entrance = entrance;
+        }
+    }
+    Camera {
+        eye,
+        target,
+        up: up.normalize_or_zero(),
+        fov_degrees: 72.0,
+        focus_distance,
     }
 }
 
@@ -1401,6 +1488,28 @@ mod tests {
     }
 
     #[test]
+    fn tunnel_transition_follows_a_full_lens_section() {
+        let stage_at = |beat_phase| {
+            Stage::at(&Sync {
+                beat_phase,
+                ..Default::default()
+            })
+        };
+        let before = stage_at(TUNNEL_BEATS - 0.01);
+        assert_eq!(before.tunnel_cross, 0.0);
+        assert_eq!(before.tunnel_field, 0.0);
+
+        let covered = stage_at(TUNNEL_BEATS + TUNNEL_TRANSITION_BEATS * 0.5);
+        assert!(covered.tunnel_cross > 0.45 && covered.tunnel_cross < 0.55);
+        assert!(covered.tunnel_field < 0.1);
+
+        let arrived = stage_at(TUNNEL_BEATS + TUNNEL_TRANSITION_BEATS + 0.01);
+        assert_eq!(arrived.tunnel_cross, 1.0);
+        assert_eq!(arrived.tunnel_field, 1.0);
+        assert!(arrived.tunnel_tentacles > 0.0);
+    }
+
+    #[test]
     fn lens_camera_never_enters_a_membrane() {
         let mut largest_correction = 0.0f32;
         let mut largest_step = 0usize;
@@ -1505,11 +1614,12 @@ mod tests {
         let mut director = Director::default();
         for step in 0..2400 {
             let phase = step as f32 / 2400.0;
-            let beat_phase = LENS_BEATS + LENS_TRANSITION_BEATS + phase * LENS_FLIGHT_BEATS;
+            let lens_section = TUNNEL_BEATS - LENS_BEATS - LENS_TRANSITION_BEATS;
+            let beat_phase = LENS_BEATS + LENS_TRANSITION_BEATS + phase * lens_section;
             let music = Sync {
                 time: beat_phase * 0.48,
                 beat_phase,
-                dt: LENS_FLIGHT_BEATS * 0.48 / 2400.0,
+                dt: lens_section * 0.48 / 2400.0,
                 low: 0.75 + (phase * 31.0).sin() * 0.65,
                 mid: 0.70 + (phase * 47.0).cos() * 0.60,
                 ..Default::default()

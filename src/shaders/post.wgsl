@@ -79,7 +79,10 @@ fn circle_of_confusion(distance_from_camera: f32, strength: f32) -> f32 {
 fn depth_of_field(uv: vec2<f32>) -> vec3<f32> {
     let center_depth = depth_at(uv);
     let center_distance = world_distance(uv, center_depth);
-    let transition_blur = 4.0 * u.lens.y * (1.0 - u.lens.y);
+    let transition_blur = max(
+        4.0 * u.lens.y * (1.0 - u.lens.y),
+        4.0 * u.tunnel.x * (1.0 - u.tunnel.x),
+    );
     // Text is part of the HDR target, so yield while a card is visible. It
     // remains typeset-sharp instead of inheriting the scene's focal plane.
     let strength = max(u.dof.y, transition_blur) * (1.0 - clamp(u.intro.y, 0.0, 1.0));
@@ -188,7 +191,11 @@ fn fs_main(in: FullscreenOut) -> @location(0) vec4<f32> {
 
     // Bloom is added before tonemapping, so highlights roll off together with
     // everything else rather than clipping to white.
-    let bloom_strength = mix(BLOOM_STRENGTH, 0.92, u.lens.z);
+    let bloom_strength = mix(
+        mix(BLOOM_STRENGTH, 0.92, u.lens.z),
+        1.18,
+        u.tunnel.y,
+    );
     color += textureSample(bloom_tex, bloom_sampler, uv).rgb * bloom_strength;
 
     // Scene transition, masked by the fluid.

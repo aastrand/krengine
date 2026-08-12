@@ -29,6 +29,9 @@ struct Uniforms {
     motion: vec4<f32>,
     /// Living-lens transition: (seal, crossing, field, particle release).
     lens: vec4<f32>,
+    /// Tunnel scene: (covered transition, field, tentacle growth, beats of
+    /// forward travel).
+    tunnel: vec4<f32>,
     /// Room collapse: (amount, bleed, camera's position along the path, the
     /// radius it is gliding at).
     collapse: vec4<f32>,

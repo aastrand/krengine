@@ -71,6 +71,8 @@ struct Uniforms {
     motion: [f32; 4],
     /// (aperture seal, membrane crossing, lens field, satellite release).
     lens: [f32; 4],
+    /// (covered transition, tunnel field, tentacle growth, travel in beats).
+    tunnel: [f32; 4],
     /// (collapse, unused, unused, unused).
     collapse: [f32; 4],
     /// (focus distance, aperture strength, unused, unused).
@@ -328,6 +330,12 @@ impl Renderer {
                 stage.lens_field,
                 stage.lens_particles,
             ],
+            tunnel: [
+                stage.tunnel_cross,
+                stage.tunnel_field,
+                stage.tunnel_tentacles,
+                stage.tunnel_travel,
+            ],
             collapse: [stage.collapse, stage.bleed, along, radius],
             dof: [focus_distance, dof_strength, 0.0, 0.0],
             track,
@@ -340,7 +348,9 @@ impl Renderer {
     pub fn render(&mut self, gpu: &Gpu, music: &Sync) -> Frame {
         let stage = Stage::at(music);
 
-        let beads = if stage.lens_field > 0.999 {
+        let beads = if stage.tunnel_field > 0.999 {
+            0
+        } else if stage.lens_field > 0.999 {
             LENS_PARTICLES
         } else if stage.collapse > 0.85 {
             FRACTAL_BEADS
@@ -353,7 +363,8 @@ impl Renderer {
         // physical focus ring follows it: cuts initiate a pull instead of
         // making the focal plane teleport with the camera.
         let desired_focus = shot.focus_distance.clamp(0.35, 14.0);
-        let fractal_focus_locked = stage.collapse > 0.85 && stage.lens_field < 0.01;
+        let fractal_focus_locked =
+            stage.collapse > 0.85 && stage.lens_field < 0.01 && stage.tunnel_field < 0.01;
         if !self.focus_initialized || fractal_focus_locked {
             // Fractal shots are hard cuts. Arrive with their strings already
             // focused; watching the focal plane travel after every cut fought
@@ -363,7 +374,15 @@ impl Renderer {
         } else {
             // Lens-to-lens pulls are slow enough to be read as an optical
             // gesture. Earlier scenes retain the shorter, subtler response.
-            let focus_time = if stage.lens_field > 0.01 { 1.05 } else { 0.55 };
+            let focus_time = if stage.tunnel_field > 0.01 {
+                // Catch a growing tentacle promptly, but ease back to the
+                // tunnel's resting plane rather than snapping optically.
+                0.30
+            } else if stage.lens_field > 0.01 {
+                1.05
+            } else {
+                0.55
+            };
             let focus_alpha = 1.0 - (-music.dt.max(0.0) / focus_time).exp();
             self.focus_distance += (desired_focus - self.focus_distance) * focus_alpha;
             if stage.collapse <= 0.85 && stage.lens_field <= 0.01 {
@@ -375,7 +394,11 @@ impl Renderer {
                 self.focus_distance = self.focus_distance.min(desired_focus);
             }
         }
-        let dof_strength = if stage.lens_field > 0.01 {
+        let dof_strength = if stage.tunnel_field > 0.01 {
+            // Keep the tunnel predominantly crisp. The changing focal plane
+            // should gently isolate a tentacle, never turn the bore to fog.
+            0.26 * stage.tunnel_field
+        } else if stage.lens_field > 0.01 {
             1.16
         } else if stage.collapse > 0.85 {
             // The fractal is dense enough that selective focus reads as a

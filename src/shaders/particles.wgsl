@@ -75,6 +75,9 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
             center = clear_of_lenses(center);
             visible = step(f32(ii), f32(LENS_SATELLITE_COUNT - 1u)) * u.lens.w;
         }
+        if u.tunnel.x > 0.0 {
+            visible = visible * (1.0 - u.tunnel.y);
+        }
     }
     if u.debug.y > 0.5 {
         let forward = camera_ray(vec2<f32>(0.0, 0.0));
