@@ -8,7 +8,8 @@ pub struct ScenePass {
 
 impl ScenePass {
     pub fn new(device: &wgpu::Device, uniform_layout: &wgpu::BindGroupLayout) -> Self {
-        let module = shader::module(device, "scene.wgsl", include_str!("../shaders/scene.wgsl"));
+        let source = shader::scene_source();
+        let module = shader::module(device, "scene.wgsl", &source);
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("scene layout"),
