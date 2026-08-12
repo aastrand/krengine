@@ -101,7 +101,8 @@ fn fs_main(in: FullscreenOut) -> @location(0) vec4<f32> {
 
     // Bloom is added before tonemapping, so highlights roll off together with
     // everything else rather than clipping to white.
-    color += textureSample(bloom_tex, bloom_sampler, uv).rgb * BLOOM_STRENGTH;
+    let bloom_strength = mix(BLOOM_STRENGTH, 0.92, u.lens.z);
+    color += textureSample(bloom_tex, bloom_sampler, uv).rgb * bloom_strength;
 
     // Scene transition, masked by the fluid.
     //
@@ -124,7 +125,9 @@ fn fs_main(in: FullscreenOut) -> @location(0) vec4<f32> {
     let edge = crossed * (1.0 - crossed) * 4.0;
     color += VEIN_COLOR * edge * 1.6;
 
-    color = tonemap(color * 1.15);
+    // Preserve bloom in the lens field while lowering its base exposure; the
+    // transparent membranes were otherwise a screen of near-white circles.
+    color = tonemap(color * mix(1.15, 0.88, u.lens.z));
 
     // Vignette, corrected for aspect so it stays circular on a wide window.
     let aspect = u.resolution.x / max(u.resolution.y, 1.0);

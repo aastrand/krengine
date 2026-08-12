@@ -27,6 +27,8 @@ struct Uniforms {
     scene: vec4<f32>,
     /// Body motion: (merge, yaw, tilt, palette shift).
     motion: vec4<f32>,
+    /// Living-lens transition: (seal, crossing, field, particle release).
+    lens: vec4<f32>,
     /// Room collapse: (amount, bleed, camera's position along the path, the
     /// radius it is gliding at).
     collapse: vec4<f32>,
@@ -213,6 +215,88 @@ fn sphere_direction(i: u32, count: u32) -> vec3<f32> {
     let radius = sqrt(max(1.0 - y * y, 0.0));
     let theta = fi * 2.399963;
     return vec3<f32>(cos(theta) * radius, y, sin(theta) * radius);
+}
+
+// --- living lenses -----------------------------------------------------
+// Shared by the ray-traced membranes and their satellite particles.
+
+const LENS_COUNT: u32 = 7u;
+
+fn lens_base_center(i: u32) -> vec3<f32> {
+    switch i {
+        case 0u: { return vec3<f32>(-2.70, 0.50, 0.40); }
+        case 1u: { return vec3<f32>(2.50, -0.80, -0.40); }
+        case 2u: { return vec3<f32>(0.00, 2.70, -2.00); }
+        case 3u: { return vec3<f32>(-3.80, -1.80, -3.70); }
+        case 4u: { return vec3<f32>(4.00, 1.70, -4.20); }
+        case 5u: { return vec3<f32>(0.60, -2.90, -5.50); }
+        default: { return vec3<f32>(-0.80, 0.50, -8.00); }
+    }
+}
+
+fn lens_radius(i: u32) -> f32 {
+    switch i {
+        case 0u: { return 1.72; }
+        case 1u: { return 1.48; }
+        case 2u: { return 1.08; }
+        case 3u: { return 1.68; }
+        case 4u: { return 1.88; }
+        case 5u: { return 1.28; }
+        default: { return 2.45; }
+    }
+}
+
+fn lens_center(i: u32) -> vec3<f32> {
+    let fi = f32(i);
+    // Large forms barely drift. Bass shifts the suspended mass rather than
+    // scaling the whole object, so the response reads as weight, not bounce.
+    let drift = vec3<f32>(
+        sin(u.time * 0.13 + fi * 1.9),
+        cos(u.time * 0.11 + fi * 2.3),
+        sin(u.time * 0.09 + fi * 0.7),
+    ) * (0.025 + u.audio.x * 0.035);
+    return lens_base_center(i) + drift;
+}
+
+/// Radius of one membrane in a given direction. Shared with the particle pass
+/// so satellites can respect the exact same audio-deformed boundary.
+fn lens_shape_radius(direction: vec3<f32>, i: u32) -> f32 {
+    let fi = f32(i);
+    let broad = (
+        sin(direction.x * 2.7 + direction.y * 1.3 + u.time * 0.23 + fi)
+        + sin(direction.y * 3.1 - direction.z * 1.7 - u.time * 0.19 + fi * 1.9)
+        + sin(direction.z * 2.4 + direction.x * 1.5 + u.time * 0.17 + fi * 2.7)
+    ) / 3.0;
+    let fold_axis = normalize(vec3<f32>(sin(fi * 1.7) + 0.3, cos(fi * 2.1), sin(fi * 0.8) + 0.2));
+    let folds = sin(dot(direction, fold_axis) * 6.0 + u.time * 0.31 + fi * 2.2);
+    let travelling = sin(
+        dot(direction, normalize(vec3<f32>(0.7, 0.25, -0.45))) * 10.0
+            - u.music.z * PI * 2.0
+            + fi * 1.4,
+    );
+    let deformation = broad * (0.145 + u.audio.x * 0.08)
+        + folds * 0.045
+        + travelling * (0.020 + u.audio.y * 0.060);
+    return lens_radius(i) * (1.0 + deformation);
+}
+
+/// Project a satellite outside the union of all membranes. Several passes are
+/// intentional: moving clear of one overlapping lens can enter its neighbour.
+fn clear_of_lenses(p: vec3<f32>) -> vec3<f32> {
+    var result = p;
+    for (var iteration = 0; iteration < 4; iteration = iteration + 1) {
+        for (var i = 0u; i < LENS_COUNT; i = i + 1u) {
+            let center = lens_center(i);
+            let q = result - center;
+            let distance = max(length(q), 1.0e-5);
+            let direction = q / distance;
+            let boundary = lens_shape_radius(direction, i) + 0.11;
+            if distance < boundary {
+                result = center + direction * boundary;
+            }
+        }
+    }
+    return result;
 }
 
 /// How far spike `i` sticks out, before length and drive are applied. Most

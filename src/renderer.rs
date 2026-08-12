@@ -41,6 +41,9 @@ pub const PARTICLE_COUNT: u32 = 512;
 /// the twelve corridors visibly populated, filling the architecture with a
 /// field of threads rather than a small bundle.
 const FRACTAL_BEADS: u32 = 1152;
+/// Sparse droplets for the lens field. More makes circular halos around every
+/// membrane, which reads as a diagram of planets rather than suspended fluid.
+const LENS_PARTICLES: u32 = 420;
 
 /// Mirrors `Uniforms` in shaders/common.wgsl. Keep the field order in sync.
 #[repr(C)]
@@ -66,6 +69,8 @@ struct Uniforms {
     scene: [f32; 4],
     /// (merge, yaw, tilt, unused).
     motion: [f32; 4],
+    /// (aperture seal, membrane crossing, lens field, satellite release).
+    lens: [f32; 4],
     /// (collapse, unused, unused, unused).
     collapse: [f32; 4],
     /// The traced corridor the bead string runs along, as world positions.
@@ -255,7 +260,7 @@ impl Renderer {
         let eye = shot.eye;
 
         let aspect = gpu.config.width as f32 / gpu.config.height as f32;
-        let view = view::look_at_mat4(eye, shot.target, Vec3::Y);
+        let view = view::look_at_mat4(eye, shot.target, shot.up);
         // directx variant maps depth to 0..1, which is what wgpu expects.
         let proj = directx::perspective(shot.fov_degrees.to_radians(), aspect, 0.05, 100.0);
         let view_proj = proj * view;
@@ -307,6 +312,12 @@ impl Renderer {
                 stage.card_offset[1],
             ],
             scene: [stage.spike, stage.dissolve, stage.burst, stage.smoke],
+            lens: [
+                stage.lens_seal,
+                stage.lens_cross,
+                stage.lens_field,
+                stage.lens_particles,
+            ],
             collapse: [stage.collapse, stage.bleed, along, radius],
             track,
             track_frame,
@@ -318,7 +329,9 @@ impl Renderer {
     pub fn render(&mut self, gpu: &Gpu, music: &Sync) -> Frame {
         let stage = Stage::at(music);
 
-        let beads = if stage.collapse > 0.85 {
+        let beads = if stage.lens_field > 0.999 {
+            LENS_PARTICLES
+        } else if stage.collapse > 0.85 {
             FRACTAL_BEADS
         } else {
             PARTICLE_COUNT

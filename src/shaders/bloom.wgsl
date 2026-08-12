@@ -26,11 +26,14 @@ fn uv_of(in: FullscreenOut) -> vec2<f32> {
 fn fs_prefilter(in: FullscreenOut) -> @location(0) vec4<f32> {
     let color = textureSample(src, src_sampler, uv_of(in)).rgb;
     let brightness = max(color.r, max(color.g, color.b));
+    // The lens section is built from transparent highlights rather than solid
+    // emissive veins, so let its orange rims enter bloom sooner.
+    let threshold = mix(THRESHOLD, 0.72, u.lens.z);
 
-    let soft = clamp(brightness - THRESHOLD + KNEE, 0.0, 2.0 * KNEE);
+    let soft = clamp(brightness - threshold + KNEE, 0.0, 2.0 * KNEE);
     let contribution = max(
         soft * soft / (4.0 * KNEE + 0.0001),
-        brightness - THRESHOLD,
+        brightness - threshold,
     );
 
     return vec4<f32>(color * (contribution / max(brightness, 0.0001)), 1.0);
