@@ -31,10 +31,33 @@ const CARDS: [&str; 6] = [
     "dagspress: whodini",
 ];
 
-/// Supersampling factor. The scene renders at this multiple of the window and
-/// the post pass filters it down — with a linear sampler, 2x is an exact 2x2
-/// box per output pixel. Simple, and no ghosting the way reprojection has.
-const RENDER_SCALE: u32 = 2;
+/// Supersampling factor, over the *logical* window. The scene renders at this
+/// multiple of it and the post pass filters it down — with a linear sampler, 2x
+/// over a 1x display is an exact 2x2 box per output pixel. Simple, and no
+/// ghosting the way reprojection has.
+///
+/// Logical, not physical, deliberately. The surface is in physical pixels, so
+/// on a Retina display multiplying *that* by 2 raymarches 5120x2880 for a
+/// 1280x720 window — four times the pixels of the same demo on an ordinary
+/// monitor, at no visible benefit, because the window is 720p either way. The
+/// scene pass is ~95% of the frame and scales linearly with pixel count, so
+/// that difference alone is the gap between a machine running the demo and not.
+/// Sizing off the logical window makes the cost, and the image, the same
+/// everywhere.
+///
+/// `KR_SCALE` overrides the factor for machines that cannot pay even this.
+const RENDER_SCALE: f32 = 2.0;
+
+fn render_scale() -> f32 {
+    static SCALE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *SCALE.get_or_init(|| {
+        std::env::var("KR_SCALE")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .filter(|v| *v > 0.0)
+            .unwrap_or(RENDER_SCALE)
+    })
+}
 
 pub const PARTICLE_COUNT: u32 = 512;
 /// Beads in the fractal scene, split between the strings. This keeps each of
@@ -91,11 +114,18 @@ struct Targets {
 }
 
 impl Targets {
-    /// Note the scene is allocated supersampled; bloom and the swapchain are
-    /// not.
-    fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
-        let width = width * RENDER_SCALE;
-        let height = height * RENDER_SCALE;
+    /// `width`/`height` are the surface's physical pixels. The scene is
+    /// allocated supersampled over the logical window — see `RENDER_SCALE` —
+    /// while bloom and the swapchain stay at the surface's own size.
+    fn new(device: &wgpu::Device, width: u32, height: u32, dpi: f32) -> Self {
+        let scale = render_scale() / dpi.max(1.0);
+        let width = ((width as f32 * scale) as u32).max(1);
+        let height = ((height as f32 * scale) as u32).max(1);
+        log::info!(
+            "scene target: {width}x{height} ({:.1} Mpx) at {}x over a {dpi}x display",
+            (width as f64 * height as f64) / 1.0e6,
+            render_scale(),
+        );
         let make = |label, format, usage| {
             device
                 .create_texture(&wgpu::TextureDescriptor {
@@ -202,7 +232,12 @@ impl Renderer {
             gpu.config.format,
         );
 
-        let targets = Targets::new(device, gpu.config.width, gpu.config.height);
+        let targets = Targets::new(
+            device,
+            gpu.config.width,
+            gpu.config.height,
+            gpu.scale_factor(),
+        );
         let fluid = FluidPass::new(device, &uniform_layout, &targets.depth);
         let bloom_targets =
             bloom.targets(device, &targets.hdr, gpu.config.width, gpu.config.height);
@@ -236,7 +271,12 @@ impl Renderer {
     }
 
     pub fn resize(&mut self, gpu: &Gpu) {
-        self.targets = Targets::new(&gpu.device, gpu.config.width, gpu.config.height);
+        self.targets = Targets::new(
+            &gpu.device,
+            gpu.config.width,
+            gpu.config.height,
+            gpu.scale_factor(),
+        );
         self.fluid.resize(&gpu.device, &self.targets.depth);
         self.bloom_targets = self.bloom.targets(
             &gpu.device,

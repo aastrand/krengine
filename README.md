@@ -24,7 +24,15 @@ Controls:
 
 - `B` toggles the FFT-band overlay.
 - `Esc` exits.
+
+Environment:
+
 - `KR_DEBUG=1` logs frame timing and measured audio latency.
+- `KR_SCALE=<factor>` overrides the supersampling factor. The scene pass is
+  around 95% of the frame and scales linearly with pixel count, so this is the
+  one knob that matters on a slower GPU. Halving it roughly triples the frame
+  rate.
+- `KR_BENCH=<seconds>` exits after that long, for unattended timing runs.
 
 ## Project structure
 
@@ -78,9 +86,14 @@ buffer shared by the GPU passes.
 Run the validation suite with:
 
 ```sh
-cargo test
-cargo check --release
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo build --release --all-targets
+cargo test --release
 ```
+
+That is exactly what CI gates on, in the same order. Running less than all four
+is how a red build gets pushed.
 
 The tests parse and validate the fully composed WGSL scene shader, check that
 CPU and GPU uniform array sizes match, and exercise camera/fractal constraints.

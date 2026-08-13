@@ -13,7 +13,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # cpal needs ALSA headers to build, even though CI never plays anything.
       - name: Install audio headers

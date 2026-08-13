@@ -39,6 +39,8 @@ struct App {
     music: Option<Music>,
     /// Seconds the run started into the tune.
     skip: f32,
+    /// Exit after this many seconds, for unattended timing runs (`KR_BENCH`).
+    bench: Option<f32>,
 }
 
 impl ApplicationHandler for App {
@@ -112,7 +114,10 @@ impl ApplicationHandler for App {
                 }
                 state.prev_music_time = music.time;
 
-                if state.debug && state.frame_times.len() >= 240 {
+                // Report every 240 frames, or every three seconds when frames are
+                // slow enough that 240 of them would take minutes to collect.
+                let collected: f32 = state.frame_times.iter().sum();
+                if state.debug && (state.frame_times.len() >= 240 || collected >= 3000.0) {
                     let mut sorted = std::mem::take(&mut state.frame_times);
                     sorted.sort_by(f32::total_cmp);
                     let at = |q: f32| sorted[(sorted.len() as f32 * q) as usize % sorted.len()];
@@ -127,6 +132,11 @@ impl ApplicationHandler for App {
                 }
                 if let Frame::Reconfigure = state.renderer.render(&state.gpu, &music) {
                     state.gpu.reconfigure();
+                }
+                if let Some(limit) = self.bench
+                    && (now - state.start).as_secs_f32() > limit
+                {
+                    event_loop.exit();
                 }
                 state.window.request_redraw();
             }
@@ -162,6 +172,7 @@ fn main() -> anyhow::Result<()> {
     event_loop.run_app(&mut App {
         music,
         skip,
+        bench: std::env::var("KR_BENCH").ok().and_then(|v| v.parse().ok()),
         ..Default::default()
     })?;
     Ok(())

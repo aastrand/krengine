@@ -10,13 +10,17 @@ pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub config: wgpu::SurfaceConfiguration,
+    /// Kept so the render targets can be sized against the *logical* window.
+    /// `config` is in physical pixels, which on a HiDPI display is already a
+    /// multiple of the window we asked for.
+    window: Arc<Window>,
 }
 
 impl Gpu {
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
         let size = window.inner_size();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let surface = instance.create_surface(window)?;
+        let surface = instance.create_surface(window.clone())?;
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -63,7 +67,15 @@ impl Gpu {
             device,
             queue,
             config,
+            window,
         })
+    }
+
+    /// Physical pixels per logical pixel. 1.0 on an ordinary display, 2.0 on a
+    /// Retina one — and read fresh each time, since dragging the window to
+    /// another monitor changes it.
+    pub fn scale_factor(&self) -> f32 {
+        self.window.scale_factor() as f32
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
