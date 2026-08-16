@@ -7,18 +7,16 @@ cube sea, particle strings, bloom, and depth of field.
 ## Run
 
 ```sh
-cargo run --release -- path/to/module.xm
+cargo run --release
 ```
 
-Pass a second argument to start both the music and timeline at a given number
-of seconds:
+Pass an optional number of seconds to start both the music and timeline there:
 
 ```sh
-cargo run --release -- path/to/module.xm 30
+cargo run --release -- 30
 ```
 
-The demo can run without a module, but audio-reactive motion and beat-driven
-timeline changes require one.
+The demo always uses the bundled Ogg soundtrack.
 
 Controls:
 
@@ -39,7 +37,7 @@ Environment:
 ```text
 src/
   main.rs             window, event loop, and command-line arguments
-  audio.rs            module playback, FFT analysis, beats, and demo clock
+  audio.rs            Ogg playback, FFT analysis, beats, and demo clock
   timeline.rs         section timing, edit decisions, and shared camera state
   timeline/cameras.rs lens and tunnel camera rigs and safety constraints
   renderer.rs         per-frame uniforms and render-pass ordering

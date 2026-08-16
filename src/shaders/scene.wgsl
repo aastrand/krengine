@@ -92,6 +92,21 @@ fn fs_main(in: FullscreenOut) -> SceneOut {
             return out;
         }
 
+        if u.scene.z > 0.0 && u.lens.y <= 0.0 {
+            let fractal = render_fractal_scene(ro, rd);
+            let signal = render_signal_scene(ro, rd);
+            let closing = smoothstep(0.0, 0.46, u.scene.z);
+            let opening = smoothstep(0.54, 1.0, u.scene.z);
+            let switched = select(
+                fractal.color * (1.0 - closing),
+                signal.color * opening,
+                u.scene.z >= 0.5,
+            );
+            out.color = vec4<f32>(switched * fade, 1.0);
+            out.depth = select(fractal.depth, signal.depth, u.scene.z >= 0.5);
+            return out;
+        }
+
         // One circular aperture seals over the fractal, closes over the whole
         // frame, then opens onto the lens field. The scene and camera swap at
         // the fully opaque midpoint; neither is cross-faded while visible.
@@ -112,7 +127,10 @@ fn fs_main(in: FullscreenOut) -> SceneOut {
                 * u.lens.x * (1.0 - closing) * 0.10;
             sample_uv = sample_uv + vec2<f32>(q.x / aspect, q.y) / radial * bend;
         }
-        let old = render_fractal_scene(ro, camera_ray(sample_uv));
+        var old = render_fractal_scene(ro, camera_ray(sample_uv));
+        if u.scene.z > 0.5 {
+            old = render_signal_scene(ro, camera_ray(sample_uv));
+        }
         let lenses = render_lens_scene(ro, rd);
         let film = mix(LENS_SHADOW, LENS_IVORY, 0.72)
             + LENS_PEACH * (0.08 + u.audio.z * 0.08);

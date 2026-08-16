@@ -11,7 +11,7 @@ struct Uniforms {
     particle_count: f32,
     /// Band envelopes and beat pulse: (low, mid, high, beat).
     audio: vec4<f32>,
-    /// Song position: (row, pattern, beats elapsed, phase within the bar).
+    /// Song position: (reserved, reserved, beats elapsed, phase within the bar).
     music: vec4<f32>,
     /// FFT spectrum, 16 log-spaced bands packed four to a vector.
     bands: array<vec4<f32>, 4>,

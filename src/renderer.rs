@@ -329,12 +329,7 @@ impl Renderer {
             time,
             particle_count: beads as f32,
             audio: [music.low, music.mid, music.high, music.beat],
-            music: [
-                music.row as f32,
-                music.pattern as f32,
-                music.beat_phase,
-                music.bar_phase,
-            ],
+            music: [0.0, 0.0, music.beat_phase, music.bar_phase],
             bands: bytemuck::cast(music.bands),
             debug: [
                 if show_bands { 1.0 } else { 0.0 },
@@ -361,7 +356,12 @@ impl Renderer {
                 stage.card_offset[0],
                 stage.card_offset[1],
             ],
-            scene: [stage.spike, stage.dissolve, 0.0, 0.0],
+            scene: [
+                stage.spike,
+                stage.dissolve,
+                stage.signal_field,
+                stage.signal_travel,
+            ],
             lens: [
                 stage.lens_seal,
                 stage.lens_cross,
@@ -395,7 +395,9 @@ impl Renderer {
 
         let beads = if stage.cube_field > 0.001 {
             CUBE_PARTICLES
-        } else if stage.tunnel_field > 0.999 {
+        } else if (stage.signal_field > 0.001 && stage.lens_field < 0.999)
+            || stage.tunnel_field > 0.999
+        {
             0
         } else if stage.lens_field > 0.999 {
             LENS_PARTICLES
@@ -411,9 +413,16 @@ impl Renderer {
         // making the focal plane teleport with the camera.
         let desired_focus = shot.focus_distance.clamp(0.35, 14.0);
         let blob_focus_locked = stage.collapse <= 0.85;
-        let fractal_focus_locked =
-            stage.collapse > 0.85 && stage.lens_field < 0.01 && stage.tunnel_field < 0.01;
-        if !self.focus_initialized || blob_focus_locked || fractal_focus_locked {
+        let fractal_focus_locked = stage.collapse > 0.85
+            && stage.signal_field < 0.5
+            && stage.lens_field < 0.01
+            && stage.tunnel_field < 0.01;
+        let signal_focus_locked = stage.signal_field > 0.5 && stage.lens_field < 0.01;
+        if !self.focus_initialized
+            || blob_focus_locked
+            || fractal_focus_locked
+            || signal_focus_locked
+        {
             // Blob and fractal shots are hard cuts. Arrive with the subject
             // already focused: a delayed rack makes the hero object look like
             // the camera briefly lost it, rather than like an authored pull.
@@ -422,7 +431,9 @@ impl Renderer {
         } else {
             // Lens-to-lens pulls are slow enough to be read as an optical
             // gesture. Earlier scenes retain the shorter, subtler response.
-            let focus_time = if stage.tunnel_field > 0.01 {
+            let focus_time = if stage.signal_field > 0.5 && stage.lens_field < 0.01 {
+                0.28
+            } else if stage.tunnel_field > 0.01 {
                 // Catch a growing tentacle promptly, but ease back to the
                 // tunnel's resting plane rather than snapping optically.
                 0.30
@@ -434,7 +445,19 @@ impl Renderer {
             let focus_alpha = 1.0 - (-music.dt.max(0.0) / focus_time).exp();
             self.focus_distance += (desired_focus - self.focus_distance) * focus_alpha;
         }
-        let dof_strength = if stage.tunnel_field > 0.01 {
+        let dof_strength = if stage.signal_field > 0.5 && stage.lens_field < 0.01 {
+            let ease = |from: f32, to: f32, value: f32| {
+                let t = ((value - from) / (to - from)).clamp(0.0, 1.0);
+                t * t * (3.0 - 2.0 * t)
+            };
+            let rack = (ease(6.5, 7.5, stage.signal_travel)
+                * (1.0 - ease(9.0, 10.0, stage.signal_travel)))
+            .max(
+                ease(15.0, 16.0, stage.signal_travel)
+                    * (1.0 - ease(17.5, 18.5, stage.signal_travel)),
+            ) * (1.0 - music.beat * 0.85);
+            0.14 + rack * 0.48
+        } else if stage.tunnel_field > 0.01 {
             // Keep the tunnel predominantly crisp. The changing focal plane
             // should gently isolate a tentacle, never turn the bore to fog.
             0.26 * stage.tunnel_field

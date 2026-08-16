@@ -1,24 +1,21 @@
 //! Music playback and sync.
 //!
-//! The tune is a tracker module, which gives us two things a plain audio file
-//! can't: an exact sample counter to use as the demo's master clock, and the
-//! pattern/row cursor, so visuals can land on musical structure rather than on
-//! guessed beats.
+//! The soundtrack is decoded up front and streamed from memory. The number of
+//! frames handed to the sound card is the demo's master clock, keeping visuals
+//! locked to the rendered song without relying on wall time.
 //!
 //! On top of that we run an FFT over the mix for a 16-band spectrum, and detect
 //! bass onsets directly. The onset detector is what drives the beat pulse: a
 //! metronome locked to the tune's BPM has the right period but no phase, so it
 //! ticks happily between the kicks.
 
+use std::io::BufReader;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use xmrs::prelude::Module;
-use xmrsplayer::audio_observer::{MixContext, MixObserver};
-use xmrsplayer::observer::{PlayerObserver, RowContext};
-use xmrsplayer::xmrsplayer::XmrsPlayer;
+use lewton::inside_ogg::OggStreamReader;
 
 /// Output latency is measured from the backend; this is the extra nudge for
 /// everything it can't see (display pipeline, compositor). Positive = visuals
@@ -94,8 +91,6 @@ pub struct Sync {
     pub beat_phase: f32,
     /// Position within a four-beat bar, 0..1.
     pub bar_phase: f32,
-    pub row: u32,
-    pub pattern: u32,
     /// True on the frame a hard transient lands — a peak across the whole
     /// spectrum, not just the bass. Cuts hang off this.
     pub hard_hit: bool,
@@ -111,12 +106,7 @@ pub struct Sync {
 struct SharedState {
     frames: AtomicU64,
     ring: RingBuffer,
-    row: AtomicU32,
-    pattern: AtomicU32,
-    /// Bumped on every new row, so the render loop can detect row changes
-    /// without polling faster than the music.
-    row_serial: AtomicU64,
-    /// Song tempo, republished each row so a mid-song change is picked up.
+    /// Song tempo, loaded from the soundtrack's companion `.bpm` file.
     bpm: AtomicU32,
     /// Output latency in seconds, as reported by the backend: the gap between
     /// a callback running and those samples actually being audible.
@@ -158,18 +148,6 @@ impl RingBuffer {
         for (i, slot) in out.iter_mut().enumerate() {
             *slot = f32::from_bits(self.samples[(start + i) % RING_SIZE].load(Ordering::Relaxed));
         }
-    }
-}
-
-/// Feeds the ring buffer from the mix.
-struct Tap {
-    state: Arc<SharedState>,
-}
-
-impl MixObserver for Tap {
-    fn on_mix(&mut self, ctx: &MixContext) {
-        let x = (ctx.left as f32 + ctx.right as f32) * 0.5 / 32768.0;
-        self.state.ring.push(x);
     }
 }
 
@@ -314,22 +292,6 @@ impl OnsetDetector {
     }
 }
 
-/// Publishes the pattern/row cursor as the song advances.
-struct RowTracker {
-    state: Arc<SharedState>,
-}
-
-impl PlayerObserver for RowTracker {
-    fn on_row(&mut self, ctx: &RowContext<'_>) {
-        self.state.row.store(ctx.row as u32, Ordering::Relaxed);
-        self.state
-            .pattern
-            .store(ctx.pattern as u32, Ordering::Relaxed);
-        self.state.row_serial.fetch_add(1, Ordering::Relaxed);
-        self.state.bpm.store(ctx.bpm as u32, Ordering::Relaxed);
-    }
-}
-
 pub struct Music {
     // Holding the stream alive is what keeps playback running.
     _stream: cpal::Stream,
@@ -361,13 +323,30 @@ impl Music {
     /// match, so the timeline lands in the same place — handy for working on a
     /// section without watching the intro every time.
     pub fn start(path: &std::path::Path, skip: f32) -> anyhow::Result<Self> {
-        let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-        // The player borrows the module for its whole life, and that life is
-        // the process's — leaking is simpler than a self-referential struct.
-        let module: &'static Module =
-            Box::leak(Box::new(Module::load(&bytes).map_err(|e| {
-                anyhow!("{path:?} is not a module we can read: {e:?}")
-            })?));
+        let file = std::fs::File::open(path)
+            .with_context(|| format!("opening soundtrack {}", path.display()))?;
+        let mut decoder = OggStreamReader::new(BufReader::new(file))
+            .with_context(|| format!("decoding Ogg soundtrack {}", path.display()))?;
+        let source_rate = decoder.ident_hdr.audio_sample_rate;
+        let source_channels = decoder.ident_hdr.audio_channels as usize;
+        if source_channels == 0 {
+            return Err(anyhow!("soundtrack has no audio channels"));
+        }
+        let mut samples = Vec::<[f32; 2]>::new();
+        while let Some(packet) = decoder.read_dec_packet_itl()? {
+            for frame in packet.chunks(source_channels) {
+                let left = frame[0] as f32 / 32768.0;
+                let right = frame.get(1).copied().unwrap_or(frame[0]) as f32 / 32768.0;
+                samples.push([left, right]);
+            }
+        }
+
+        let bpm_path = path.with_extension("bpm");
+        let bpm: u32 = std::fs::read_to_string(&bpm_path)
+            .with_context(|| format!("reading tempo from {}", bpm_path.display()))?
+            .trim()
+            .parse()
+            .with_context(|| format!("invalid tempo in {}", bpm_path.display()))?;
 
         let host = cpal::default_host();
         let device = host
@@ -379,34 +358,22 @@ impl Music {
 
         let state = Arc::new(SharedState::default());
         state.gain.store(1.0f32.to_bits(), Ordering::Relaxed);
-        // Seed the tempo so the beat clock is right before the first row lands.
-        state
-            .bpm
-            .store(module.default_bpm as u32, Ordering::Relaxed);
-
-        let mut player = XmrsPlayer::new(module, sample_rate, 0);
-        player.set_max_loop_count(0); // loop forever
-        player.add_audio_mix_observer(Box::new(Tap {
-            state: state.clone(),
-        }));
-        player.add_observer(Box::new(RowTracker {
-            state: state.clone(),
-        }));
-
-        if skip > 0.0 {
-            // XM runs at bpm * 2/5 ticks a second.
-            let tick = (skip * module.default_bpm as f32 * 0.4) as u32;
-            player.goto_tick(tick);
-            log::info!("starting {skip:.1}s in");
-        }
+        state.bpm.store(bpm, Ordering::Relaxed);
 
         let epoch = std::time::Instant::now();
-        let player = Arc::new(Mutex::new(player));
-        let stream = Self::build_stream(&device, &config, player, state.clone(), channels)?;
+        let stream = Self::build_stream(
+            &device,
+            &config,
+            Arc::new(samples),
+            source_rate,
+            skip,
+            state.clone(),
+            channels,
+        )?;
         stream.play()?;
 
         log::info!(
-            "playing {} ({} Hz, {} ch)",
+            "playing {} at {bpm} BPM ({} Hz, {} ch)",
             path.display(),
             sample_rate,
             channels
@@ -419,7 +386,7 @@ impl Music {
             // Started where the skip lands, or the timeline would run from
             // zero while the tune ran from the skip: every scene change is
             // keyed on beats, so they would all fire at the wrong time.
-            beat_phase: skip * module.default_bpm as f32 / 60.0,
+            beat_phase: skip * bpm as f32 / 60.0,
             beat: 0.0,
             pulse: 0.0,
             epoch,
@@ -441,30 +408,40 @@ impl Music {
     fn build_stream(
         device: &cpal::Device,
         config: &cpal::SupportedStreamConfig,
-        player: Arc<Mutex<XmrsPlayer<'static>>>,
+        samples: Arc<Vec<[f32; 2]>>,
+        source_rate: u32,
+        skip: f32,
         state: Arc<SharedState>,
         channels: usize,
     ) -> anyhow::Result<cpal::Stream> {
         let err = |e| log::error!("audio stream error: {e}");
 
-        // The player yields interleaved stereo i16; fan that out to however
-        // many channels the device wants.
-        let fill = move |out: &mut [f32], info: &cpal::OutputCallbackInfo| {
+        let device_rate = config.sample_rate() as f64;
+        let step = source_rate as f64 / device_rate;
+        let mut position = skip.max(0.0) as f64 * source_rate as f64;
+        let mut fill = move |out: &mut [f32], info: &cpal::OutputCallbackInfo| {
             // Samples handed over now become audible later. Without correcting
             // for this the visuals consistently lead the music.
             let ts = info.timestamp();
             let latency = ts.playback.duration_since(ts.callback).as_secs_f32();
             state.latency.store(latency.to_bits(), Ordering::Relaxed);
 
-            let mut player = player.lock().unwrap();
             let gain = f32::from_bits(state.gain.load(Ordering::Relaxed)).clamp(0.0, 1.0);
             let mut frames = 0u64;
             for frame in out.chunks_mut(channels) {
-                let l = player.next().unwrap_or(0) as f32 / 32768.0 * gain;
-                let r = player.next().unwrap_or(0) as f32 / 32768.0 * gain;
+                let index = position as usize;
+                let fraction = position.fract() as f32;
+                let a = samples.get(index).copied().unwrap_or([0.0; 2]);
+                let b = samples.get(index + 1).copied().unwrap_or(a);
+                let l_raw = a[0] + (b[0] - a[0]) * fraction;
+                let r_raw = a[1] + (b[1] - a[1]) * fraction;
+                state.ring.push((l_raw + r_raw) * 0.5);
+                let l = l_raw * gain;
+                let r = r_raw * gain;
                 for (i, sample) in frame.iter_mut().enumerate() {
                     *sample = if i % 2 == 0 { l } else { r };
                 }
+                position += step;
                 frames += 1;
             }
             state.frames.fetch_add(frames, Ordering::Relaxed);
@@ -523,8 +500,7 @@ impl Music {
         let previous = self.last_time;
         let time = self.clock(dt);
 
-        // One beat is 60/BPM seconds — the tracker's speed cancels out of
-        // (24/speed rows per beat) x (speed*2.5/bpm seconds per row).
+        // One beat is 60/BPM seconds.
         let bpm = self.state.bpm.load(Ordering::Relaxed).max(1) as f32;
         let advanced = (time - previous).max(0.0) * bpm / 60.0;
 
@@ -538,12 +514,24 @@ impl Music {
             |range: std::ops::Range<usize>| bands[range].iter().copied().fold(0.0f32, f32::max);
         let low = peak(0..4);
 
+        // Detect the bass separately because only kicks are reliable anchors
+        // for the beat grid. Strong full-spectrum attacks include the DnB
+        // snares; those should drive the visible pulse too, but must not drag
+        // the phase away from the kick.
+        let bass_hit = self.onset.update(peak(ONSET_BANDS), dt);
+        let full = bands.iter().copied().fold(0.0f32, f32::max);
+        let hard_hit =
+            self.accent
+                .update_with(full, dt, ACCENT_SENSITIVITY, ACCENT_FLOOR, ACCENT_COOLDOWN);
+
         // The trigger envelope decays; `beat` chases it. Two stages, so the
         // rise is quick but still an ease rather than a jump.
         self.pulse *= (-dt / PULSE_DECAY).exp();
-        if self.onset.update(peak(ONSET_BANDS), dt) {
+        if bass_hit || hard_hit {
             self.pulse = 1.0;
+        }
 
+        if bass_hit {
             // Phase-lock: ease the beat grid toward this hit when the hit is
             // near a beat line. Over a few bars the phase settles onto the
             // music instead of wherever the program happened to start.
@@ -561,12 +549,6 @@ impl Music {
         }
         self.beat += (self.pulse - self.beat) * (1.0 - (-dt / PULSE_ATTACK).exp());
 
-        // Whole-spectrum peak: the accents a cut should land on.
-        let full = bands.iter().copied().fold(0.0f32, f32::max);
-        let hard_hit =
-            self.accent
-                .update_with(full, dt, ACCENT_SENSITIVITY, ACCENT_FLOOR, ACCENT_COOLDOWN);
-
         Sync {
             time,
             hard_hit,
@@ -577,10 +559,8 @@ impl Music {
             mid: peak(4..10),
             high: peak(10..BAND_COUNT),
             beat: self.beat,
-            row: self.state.row.load(Ordering::Relaxed),
             output_latency: f32::from_bits(self.state.latency.load(Ordering::Relaxed)),
             dt,
-            pattern: self.state.pattern.load(Ordering::Relaxed),
         }
     }
 }

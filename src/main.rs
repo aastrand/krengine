@@ -7,7 +7,6 @@ mod shader;
 mod text;
 mod timeline;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -51,7 +50,7 @@ impl ApplicationHandler for App {
 
         let attrs = Window::default_attributes()
             .with_title("krengine")
-            .with_inner_size(winit::dpi::LogicalSize::new(1280, 720));
+            .with_inner_size(winit::dpi::LogicalSize::new(1872, 1053));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
 
         let gpu = pollster::block_on(Gpu::new(window.clone())).expect("gpu init");
@@ -155,23 +154,25 @@ impl ApplicationHandler for App {
 fn main() -> anyhow::Result<()> {
     env_logger::init();
 
-    // krengine [module.xm] [seconds-to-skip]
+    // krengine [seconds-to-skip]
     //
     // The skip starts both the tune and the timeline that far in, so a section
     // can be worked on without sitting through the intro each run.
-    let mut args = std::env::args().skip(1);
-    let track = args.next().map(PathBuf::from);
-    let skip: f32 = args.next().and_then(|a| a.parse().ok()).unwrap_or(0.0);
+    let track = std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/neuro_architecture.ogg"
+    ));
+    let skip: f32 = std::env::args()
+        .nth(1)
+        .and_then(|a| a.parse().ok())
+        .unwrap_or(0.0);
 
-    let music = match track {
-        Some(path) => match Music::start(&path, skip) {
-            Ok(music) => Some(music),
-            Err(e) => {
-                log::error!("no music: {e:#}");
-                None
-            }
-        },
-        None => None,
+    let music = match Music::start(track, skip) {
+        Ok(music) => Some(music),
+        Err(e) => {
+            log::error!("no music: {e:#}");
+            None
+        }
     };
 
     let event_loop = EventLoop::new()?;

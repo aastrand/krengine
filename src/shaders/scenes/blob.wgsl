@@ -71,7 +71,7 @@ fn inner_field(p: vec3<f32>) -> vec2<f32> {
         // clean exponential decay, where a band is noisy enough to make the
         // surface shimmer instead of breathe.
         // Shrinks to nothing as it bleeds out into the water.
-        let r = (0.32 + 0.06 * sin(t * 1.3 + fi) + u.audio.w * 0.05) * (1.0 - u.collapse.y);
+        let r = (0.32 + 0.06 * sin(t * 1.3 + fi) + u.audio.w * 0.075) * (1.0 - u.collapse.y);
         let d = sd_blob(p - c, r, fi);
         soft = smin_cubic(soft, d, BLEND_K);
         hard = min(hard, d);

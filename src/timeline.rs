@@ -49,9 +49,10 @@ const CARD_FADE: f32 = 0.35;
 /// When the scene begins to appear, and how long it takes.
 const SCENE_START: f32 = 7.7;
 const SCENE_FADE: f32 = 2.4;
-/// When the ferrofluid takes over, in beats from the start. The intro ends
-/// around beat 16, so this leaves a short first scene rather than a long one.
-const SPIKE_BEATS: f32 = 32.0;
+/// When the ferrofluid takes over, in beats from the start. The titles clear
+/// around beat 24; holding until beat 48 gives the liquid blobs a full phrase
+/// of their own before the bristles arrive.
+const SPIKE_BEATS: f32 = 48.0;
 /// How long the change takes. Short: a transition that eases over sixteen
 /// beats reads as a fade, not as an event.
 const SPIKE_RAMP: f32 = 6.0;
@@ -143,7 +144,11 @@ const BEAD_REVEAL_BEATS: f32 = 1.5;
 
 /// The fractal gets a full section before one of its holes becomes the first
 /// living lens. The handoff itself is eight beats: seal, refract, then cross.
-const LENS_BEATS: f32 = COLLAPSE_BEATS + 42.0;
+/// Minimal signal-cube interlude after the last greeting.
+const SIGNAL_BEATS: f32 = COLLAPSE_BEATS + 40.0;
+const SIGNAL_DURATION_BEATS: f32 = 22.0;
+const SIGNAL_TRANSITION_BEATS: f32 = 2.0;
+const LENS_BEATS: f32 = SIGNAL_BEATS + SIGNAL_DURATION_BEATS;
 const LENS_SEAL_BEATS: f32 = 3.0;
 const LENS_TRANSITION_BEATS: f32 = 8.0;
 /// One long flight through the lens field before its closed spline repeats.
@@ -151,9 +156,11 @@ const LENS_TRANSITION_BEATS: f32 = 8.0;
 const LENS_FLIGHT_BEATS: f32 = 96.0;
 /// Hold one membrane in focus for two bars before pulling to another depth.
 const LENS_FOCUS_BEATS: f32 = 8.0;
-/// The lens field holds for twelve bars, then one membrane liquefies into the
-/// tunnel entrance. Eight beats leave time for a covered camera handoff.
-const TUNNEL_BEATS: f32 = LENS_BEATS + LENS_TRANSITION_BEATS + 48.0;
+/// The lens field holds for eight bars, then one membrane liquefies into the
+/// tunnel entrance. Eight beats leave time for a covered camera handoff. The
+/// shorter hold gives its spare phrase to the opening blobs while keeping the
+/// tunnel and finale locked to their existing points in the track.
+const TUNNEL_BEATS: f32 = LENS_BEATS + LENS_TRANSITION_BEATS + 12.0;
 const TUNNEL_TRANSITION_BEATS: f32 = 8.0;
 const TUNNEL_TENTACLE_BEATS: f32 = 16.0;
 /// The tunnel gets four bars to develop before it opens onto the final cube
@@ -265,6 +272,9 @@ pub struct Stage {
     /// How far the fractal's bead strings have arrived, 0 to 1. Behind the
     /// wash, so they appear with the scene they belong to.
     pub beads: f32,
+    /// Fractal-to-signal-cube transition and beats elapsed within that scene.
+    pub signal_field: f32,
+    pub signal_travel: f32,
     /// One fractal aperture sealing into a membrane.
     pub lens_seal: f32,
     /// Passage through that membrane, including the hidden camera handoff.
@@ -409,6 +419,8 @@ impl Stage {
         // the individual strings progressively from their leading ends.
         let bead_start = COLLAPSE_BEATS + COLLAPSE_RAMP + BEAD_REVEAL_DELAY;
         let beads = smoothstep(bead_start, bead_start + BEAD_REVEAL_BEATS, beats);
+        let signal_field = smoothstep(SIGNAL_BEATS, SIGNAL_BEATS + SIGNAL_TRANSITION_BEATS, beats);
+        let signal_travel = (beats - SIGNAL_BEATS).max(0.0);
 
         let lens_seal = smoothstep(LENS_BEATS, LENS_BEATS + LENS_SEAL_BEATS, beats);
         let lens_cross = smoothstep(
@@ -465,6 +477,8 @@ impl Stage {
             collapse,
             wash,
             beads,
+            signal_field,
+            signal_travel,
             lens_seal,
             lens_cross,
             lens_field,
@@ -936,6 +950,29 @@ impl Director {
             camera.focus_distance = camera.eye.distance(camera.target);
         }
 
+        // The fractal dissolves into a brutally static signal shot. Keeping
+        // this camera fixed lets the quantized cube rotation own the motion.
+        if stage.signal_field > 0.0 {
+            let rack = (smoothstep(6.5, 7.5, stage.signal_travel)
+                * (1.0 - smoothstep(9.0, 10.0, stage.signal_travel)))
+            .max(
+                smoothstep(15.0, 16.0, stage.signal_travel)
+                    * (1.0 - smoothstep(17.5, 18.5, stage.signal_travel)),
+            ) * (1.0 - music.beat * 0.85);
+            let signal = Camera {
+                eye: Vec3::new(3.25, 2.15, 4.35),
+                target: Vec3::ZERO,
+                up: Vec3::Y,
+                fov_degrees: 48.0,
+                // Rack toward the rotating room, then pull straight back to
+                // the hero whenever a synth/drum snap lands.
+                focus_distance: 4.82 + rack * 2.2,
+            };
+            if stage.signal_field >= 0.5 {
+                camera = signal;
+            }
+        }
+
         // The expanding membrane covers this handoff. By the time it clears,
         // the camera is already making the lens field's restrained side glide.
         if stage.lens_cross > 0.0 {
@@ -1124,7 +1161,7 @@ impl Camera {
         };
 
         // A small kick back on each beat, so hits register even in a wide.
-        let recoil = 1.0 + music.beat * 0.02 * (1.0 - collapse);
+        let recoil = 1.0 + music.beat * 0.035 * (1.0 - collapse);
 
         // The second scene sits closer, and every shot pushes in a little over
         // its life — eased, so the drift is never a visible start or stop.
