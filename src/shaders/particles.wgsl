@@ -42,6 +42,29 @@ fn lens_satellite_pos(i: u32) -> vec3<f32> {
     return lens_center(lens) + direction * shell + drift;
 }
 
+fn cube_impact_particle(i: u32) -> vec4<f32> {
+    let mote = i % 4u;
+    let slot = i / 4u;
+    let x = i32(slot % 10u) - 5;
+    let z = i32(slot / 10u) + 1;
+    let spacing = 1.42;
+    let anchor = vec2<f32>(
+        floor(u.camera_pos.x / spacing) + f32(x),
+        floor(u.camera_pos.z / spacing) - f32(z),
+    );
+    let phase = length(anchor) * 0.075
+        + dot(anchor, normalize(vec2<f32>(1.0, 0.63))) * 0.035;
+    let cycle = fract(u.cubes.w * 0.125 - phase);
+    let life = clamp((cycle - 0.79) / 0.20, 0.0, 1.0);
+    let alive = smoothstep(0.79, 0.84, cycle) * (1.0 - smoothstep(0.94, 0.99, cycle));
+    let seed = fract(f32(i) * 0.6180339);
+    let angle = seed * PI * 2.0 + f32(mote) * 1.7;
+    let spread = vec2<f32>(cos(angle), sin(angle)) * life * (0.12 + seed * 0.22);
+    let lift = 4.0 * life * (1.0 - life) * (0.22 + seed * 0.32);
+    let position = vec3<f32>(anchor.x * spacing + spread.x, 0.05 + lift, anchor.y * spacing + spread.y);
+    return vec4<f32>(position, alive * u.cubes.y);
+}
+
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsOut {
     let corner = QUAD[vi];
@@ -79,6 +102,11 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
             visible = visible * (1.0 - u.tunnel.y);
         }
     }
+    if u.cubes.x > 0.0 {
+        let impact = cube_impact_particle(ii);
+        center = impact.xyz;
+        visible = impact.w;
+    }
     if u.debug.y > 0.5 {
         let forward = camera_ray(vec2<f32>(0.0, 0.0));
         let right = u.camera_right.xyz;
@@ -102,8 +130,9 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     // to punch.
     let pulse = 1.0 + u.audio.w * mix(0.45, 0.06, fractal_scene);
     let fractal_size = mix(4.0 * (0.55 + arrival * 0.45), 1.65, u.lens.w);
+    let cube_size = mix(1.0, 0.38, u.cubes.y);
     let size = (0.018 + 0.022 * fract(fi * 0.31)) * pulse
-        * mix(1.0, fractal_size, fractal_scene);
+        * mix(1.0, fractal_size, fractal_scene) * cube_size;
     let world = center + (u.camera_right.xyz * corner.x + u.camera_up.xyz * corner.y) * size;
 
     var out: VsOut;
@@ -117,7 +146,8 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     let ink = vec3<f32>(0.012, 0.014, 0.022) * (0.4 + 1.6 * fract(fi * 0.517));
     let pearl = vec3<f32>(1.00, 0.42, 0.13) * (0.45 + fract(fi * 0.193) * 0.40);
     let satellite = mix(ink, pearl, step(0.76, fract(fi * 0.731)));
-    out.tint = mix(ink, satellite, u.lens.w);
+    let previous_tint = mix(ink, satellite, u.lens.w);
+    out.tint = mix(previous_tint, VEIN_COLOR * (0.55 + fract(fi * 0.417) * 0.45), u.cubes.y);
     return out;
 }
 

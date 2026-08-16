@@ -38,6 +38,34 @@ fn fs_main(in: FullscreenOut) -> SceneOut {
     // geometry to the other happens on a frame that is solid white. Move it
     // outside that window and the swap becomes a visible cut again.
     if u.collapse.x > 0.9 {
+        if u.cubes.y > 0.999 {
+            let cubes = render_cube_scene(ro, rd);
+            out.color = vec4<f32>(cubes.color * fade, 1.0);
+            out.depth = cubes.depth;
+            return out;
+        }
+
+        if u.cubes.x > 0.0 {
+            let tunnel = render_tunnel_scene(ro, rd);
+            let cubes = render_cube_scene(ro, rd);
+            let cover = 4.0 * u.cubes.x * (1.0 - u.cubes.x);
+            // A reflective cube grows out of the vanishing point, completely
+            // covering the frame while the scene and camera exchange behind it.
+            let aspect = u.resolution.x / max(u.resolution.y, 1.0);
+            let q = vec2<f32>(in.uv.x * aspect, in.uv.y);
+            let square = max(abs(q.x), abs(q.y));
+            let arriving_size = mix(0.025, 1.9, smoothstep(0.0, 0.5, u.cubes.x));
+            let departing_size = mix(1.9, 0.0, smoothstep(0.5, 1.0, u.cubes.x));
+            let half_size = select(arriving_size, departing_size, u.cubes.x >= 0.5);
+            let mask = 1.0 - smoothstep(half_size - 0.035, half_size + 0.035, square);
+            let metal = vec3<f32>(0.06, 0.07, 0.09)
+                + LENS_PEACH * (0.10 + cover * 0.55 + u.audio.w * 0.16);
+            let switched = select(tunnel.color, cubes.color, u.cubes.x >= 0.5);
+            out.color = vec4<f32>(mix(switched, metal, mask) * fade, 1.0);
+            out.depth = select(tunnel.depth, cubes.depth, u.cubes.x >= 0.5);
+            return out;
+        }
+
         if u.tunnel.y > 0.999 {
             let tunnel = render_tunnel_scene(ro, rd);
             out.color = vec4<f32>(tunnel.color * fade, 1.0);

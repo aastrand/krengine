@@ -23,7 +23,7 @@ struct Uniforms {
     intro: vec4<f32>,
     /// Card presentation: (scale, progress, clip x, clip y).
     card: vec4<f32>,
-    /// Scene state: (spike amount, dissolve, dye burst, smoke).
+    /// Scene state: (spike amount, dissolve, unused, unused).
     scene: vec4<f32>,
     /// Body motion: (merge, yaw, tilt, palette shift).
     motion: vec4<f32>,
@@ -32,6 +32,10 @@ struct Uniforms {
     /// Tunnel scene: (covered transition, field, tentacle growth, beats of
     /// forward travel).
     tunnel: vec4<f32>,
+    /// Cube sea: (covered transition, field, gravity, beats in scene).
+    cubes: vec4<f32>,
+    /// Outro: (cube fade to black, remaining cube-wave glow, unused, unused).
+    outro: vec4<f32>,
     /// Room collapse: (amount, bleed, camera's position along the path, the
     /// radius it is gliding at).
     collapse: vec4<f32>,
@@ -311,32 +315,6 @@ fn clear_of_lenses(p: vec3<f32>) -> vec3<f32> {
         }
     }
     return result;
-}
-
-/// How far spike `i` sticks out, before length and drive are applied. Most
-/// directions score near zero — the lobe field is raised to a high power — so
-/// this is what separates an actual arm from a patch of body.
-fn spike_strength(i: u32) -> f32 {
-    return spikes(sphere_direction(i / BLOB_COUNT, 96u));
-}
-
-/// The tip of spike `i`, out on the surface of one of the blobs. The fluid is
-/// stirred by these once the ferrofluid has taken over, so the smoke is dragged
-/// by the spikes rather than by beads that are no longer visible.
-fn spike_tip(i: u32, t: f32) -> vec3<f32> {
-    let blob = i % BLOB_COUNT;
-
-    // The lobe field is fixed; the body turns underneath it. So a spike that
-    // *appears* along some direction is the field's direction rotated forward
-    // by the body's angle, less the lag it has fallen behind by.
-    let field = sphere_direction(i / BLOB_COUNT, 96u);
-    let reach = BLOB_RADIUS
-        + SPIKE_LENGTH * (1.0 + u.motion.x * 0.45) * spikes(field) * u.scene.x;
-    let lag = max(reach - BLOB_RADIUS, 0.0) * SPIKE_LAG * u.motion.x;
-
-    let direction =
-        rot_y(u.motion.y - lag) * (rot_x(u.motion.z - lag * 0.55) * field);
-    return blob_center(blob, t) + direction * reach;
 }
 
 // Particles are beads strung along a handful of closed space curves. Each curve

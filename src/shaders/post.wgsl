@@ -6,12 +6,9 @@
 @group(1) @binding(2) var depth_tex: texture_depth_2d;
 @group(2) @binding(0) var bloom_tex: texture_2d<f32>;
 @group(2) @binding(1) var bloom_sampler: sampler;
-@group(3) @binding(0) var mask_tex: texture_2d<f32>;
-@group(3) @binding(1) var mask_sampler: sampler;
-
-/// Width of the dissolve's edge, in dye units. Narrow enough that the fluid's
-/// filaments show in the boundary.
-const DISSOLVE_EDGE: f32 = 0.055;
+/// Broad enough that the organic transition reads as a soft change of grade,
+/// not as an HDR contour drawn over the frame.
+const DISSOLVE_EDGE: f32 = 0.18;
 
 /// How much of the blurred highlights to mix back in.
 const BLOOM_STRENGTH: f32 = 0.55;
@@ -86,7 +83,14 @@ fn depth_of_field(uv: vec2<f32>) -> vec3<f32> {
     // Text is part of the HDR target, so yield while a card is visible. It
     // remains typeset-sharp instead of inheriting the scene's focal plane.
     let strength = max(u.dof.y, transition_blur) * (1.0 - clamp(u.intro.y, 0.0, 1.0));
-    let center_coc = circle_of_confusion(center_distance, strength);
+    var center_coc = circle_of_confusion(center_distance, strength);
+    // During the blob/ferrofluid section, anything with traced scene depth is
+    // hero geometry (or a foreground particle). Keep it optically
+    // locked even when spinning arms span several focal planes; depth of field
+    // remains available to soften only the far environment behind it.
+    let blob_scene = 1.0 - smoothstep(0.80, 0.86, u.collapse.x);
+    let foreground = 1.0 - step(0.9999, center_depth);
+    center_coc = center_coc * (1.0 - blob_scene * foreground);
     if center_coc < 0.015 {
         return textureSample(hdr_tex, hdr_sampler, uv).rgb;
     }
@@ -191,21 +195,20 @@ fn fs_main(in: FullscreenOut) -> @location(0) vec4<f32> {
 
     // Bloom is added before tonemapping, so highlights roll off together with
     // everything else rather than clipping to white.
-    let bloom_strength = mix(
+    let scene_bloom_strength = mix(
         mix(BLOOM_STRENGTH, 0.92, u.lens.z),
         1.18,
         u.tunnel.y,
     );
+    let bloom_strength = mix(scene_bloom_strength, BLOOM_STRENGTH, u.outro.x);
     color += textureSample(bloom_tex, bloom_sampler, uv).rgb * bloom_strength;
 
-    // Scene transition, masked by the fluid.
-    //
-    // The dye field is already a full-screen scalar, so it can threshold one
-    // grade into another. Sweeping the threshold from above the dye's maximum
-    // down past zero wipes the frame in the shape of the flow, which means the
-    // transition curls and is never the same twice.
-    let dye = textureSample(mask_tex, mask_sampler, uv).x;
-    let threshold = mix(1.5, -DISSOLVE_EDGE, u.scene.y);
+    // Stable layered noise replaces the removed fluid dye as the transition
+    // field. Low frequencies carry the wipe; a restrained second octave keeps
+    // its boundary organic without breaking it into bright hairlines.
+    let field_uv = vec3<f32>((uv - 0.5) * vec2<f32>(4.2, 2.4), 7.3);
+    let dye = fbm(field_uv) * 0.78 + fbm(field_uv * 2.1 + vec3<f32>(4.0)) * 0.22;
+    let threshold = mix(1.18, -0.12, u.scene.y);
     let crossed = smoothstep(threshold + DISSOLVE_EDGE, threshold - DISSOLVE_EDGE, dye);
 
     // What the scene grades to on the far side: warmer and harder, to sit with
@@ -214,10 +217,11 @@ fn fs_main(in: FullscreenOut) -> @location(0) vec4<f32> {
     let after = mix(vec3<f32>(luma), color * vec3<f32>(1.06, 1.0, 0.95), 1.08);
     color = mix(color, after, crossed);
 
-    // The dissolve's leading edge glows, so the wipe reads as something
-    // burning through rather than a fade.
+    // A broad warm body and a faint core. The old narrow, high-energy line was
+    // technically crisp but visually detached from both scenes.
     let edge = crossed * (1.0 - crossed) * 4.0;
-    color += VEIN_COLOR * edge * 1.6;
+    let core = pow(edge, 4.0);
+    color += VEIN_COLOR * edge * 0.28 + VEIN_CORE * core * 0.10;
 
     // Preserve bloom in the lens field while lowering its base exposure; the
     // transparent membranes were otherwise a screen of near-white circles.

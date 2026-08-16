@@ -28,7 +28,11 @@ fn fs_prefilter(in: FullscreenOut) -> @location(0) vec4<f32> {
     let brightness = max(color.r, max(color.g, color.b));
     // The lens section is built from transparent highlights rather than solid
     // emissive veins, so let its orange rims enter bloom sooner.
-    let threshold = mix(mix(THRESHOLD, 0.72, u.lens.z), 0.64, u.tunnel.y);
+    let scene_threshold = mix(mix(THRESHOLD, 0.72, u.lens.z), 0.64, u.tunnel.y);
+    // Later scene flags remain latched, but the outro cards intentionally
+    // return to the opening treatment. Restore its stricter threshold so the
+    // moving letter glint blooms lightly instead of filling each glyph.
+    let threshold = mix(scene_threshold, THRESHOLD, u.outro.x);
 
     let soft = clamp(brightness - threshold + KNEE, 0.0, 2.0 * KNEE);
     let contribution = max(

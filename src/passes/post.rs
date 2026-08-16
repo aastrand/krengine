@@ -3,7 +3,6 @@ use crate::shader;
 /// Resolves the HDR target to the swapchain.
 pub struct PostPass {
     pipeline: wgpu::RenderPipeline,
-    hdr_layout: wgpu::BindGroupLayout,
     scene_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
 }
@@ -16,28 +15,6 @@ impl PostPass {
         output_format: wgpu::TextureFormat,
     ) -> Self {
         let module = shader::module(device, "post.wgsl", include_str!("../shaders/post.wgsl"));
-
-        let hdr_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("hdr layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("hdr sampler"),
@@ -84,7 +61,6 @@ impl PostPass {
                 Some(uniform_layout),
                 Some(&scene_layout),
                 Some(bloom_layout),
-                Some(&hdr_layout),
             ],
             immediate_size: 0,
         });
@@ -113,7 +89,6 @@ impl PostPass {
 
         Self {
             pipeline,
-            hdr_layout,
             scene_layout,
             sampler,
         }
@@ -145,27 +120,6 @@ impl PostPass {
         })
     }
 
-    pub fn make_bind_group(
-        &self,
-        device: &wgpu::Device,
-        hdr: &wgpu::TextureView,
-    ) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("hdr bind group"),
-            layout: &self.hdr_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(hdr),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        })
-    }
-
     pub fn draw(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -173,7 +127,6 @@ impl PostPass {
         uniforms: &wgpu::BindGroup,
         hdr: &wgpu::BindGroup,
         bloom: &wgpu::BindGroup,
-        mask: &wgpu::BindGroup,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("post pass"),
@@ -195,7 +148,6 @@ impl PostPass {
         pass.set_bind_group(0, uniforms, &[]);
         pass.set_bind_group(1, hdr, &[]);
         pass.set_bind_group(2, bloom, &[]);
-        pass.set_bind_group(3, mask, &[]);
         pass.draw(0..3, 0..1);
     }
 }

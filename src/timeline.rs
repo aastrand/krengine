@@ -11,8 +11,8 @@ use crate::audio::Sync;
 
 mod cameras;
 use cameras::{
-    choose_lens_focus, lens_camera, lens_focus_distance, lens_is_visible, stabilize_lens_view,
-    tunnel_camera,
+    choose_lens_focus, cube_camera, lens_camera, lens_focus_distance, lens_is_visible,
+    stabilize_lens_view, tunnel_camera,
 };
 
 #[cfg(test)]
@@ -22,12 +22,17 @@ use cameras::{
 
 /// Cards shown before the scene appears, as (start, end) in seconds.
 const CARDS: [(f32, f32); 3] = [(0.4, 2.9), (3.2, 5.5), (5.8, 8.1)];
-/// Credits, in beats from the start, running under the ferrofluid. Indexed
-/// after the three intro cards.
-const CREDITS: [(f32, f32); 3] = [
-    (MERGE_BEATS + 4.0, MERGE_BEATS + 12.0),
-    (MERGE_BEATS + 13.0, MERGE_BEATS + 21.0),
-    (MERGE_BEATS + 22.0, MERGE_BEATS + 30.0),
+/// A single attribution under the ferrofluid, indexed after the intro cards.
+const CREDITS: [(f32, f32); 1] = [(MERGE_BEATS + 6.0, MERGE_BEATS + 18.0)];
+/// Greetings occupy the settled fractal section, after its white swap and bead
+/// reveal but before the first aperture begins sealing into a lens.
+const GREETINGS: [(f32, f32); 6] = [
+    (COLLAPSE_BEATS + 14.0, COLLAPSE_BEATS + 18.0),
+    (COLLAPSE_BEATS + 18.4, COLLAPSE_BEATS + 22.4),
+    (COLLAPSE_BEATS + 22.8, COLLAPSE_BEATS + 26.8),
+    (COLLAPSE_BEATS + 27.2, COLLAPSE_BEATS + 31.2),
+    (COLLAPSE_BEATS + 31.6, COLLAPSE_BEATS + 35.6),
+    (COLLAPSE_BEATS + 36.0, COLLAPSE_BEATS + 40.0),
 ];
 /// Credits sit small, low, and in black — they are a footnote to the scene,
 /// not a title over it.
@@ -151,6 +156,29 @@ const LENS_FOCUS_BEATS: f32 = 8.0;
 const TUNNEL_BEATS: f32 = LENS_BEATS + LENS_TRANSITION_BEATS + 48.0;
 const TUNNEL_TRANSITION_BEATS: f32 = 8.0;
 const TUNNEL_TENTACLE_BEATS: f32 = 16.0;
+/// The tunnel gets four bars to develop before it opens onto the final cube
+/// sea. That is long enough for its corkscrew and tentacles to register, but
+/// short enough that it remains connective tissue rather than a second finale.
+const CUBE_BEATS: f32 = TUNNEL_BEATS + TUNNEL_TRANSITION_BEATS + 32.0;
+/// A fast cover: the approaching cube is an accent, not another full scene.
+const CUBE_TRANSITION_BEATS: f32 = 3.0;
+/// Motion is already established behind the transition when the sea appears.
+const CUBE_GRAVITY_LEAD_BEATS: f32 = 6.0;
+const CUBE_GRAVITY_BEATS: f32 = 8.0;
+/// Four bars of the complete cube field before it fades into the end cards.
+const OUTRO_BEATS: f32 = CUBE_BEATS + CUBE_TRANSITION_BEATS + 32.0;
+const OUTRO_FADE_BEATS: f32 = 8.0;
+const OUTRO_CARDS: [(f32, f32); 2] = [
+    (
+        OUTRO_BEATS + OUTRO_FADE_BEATS + 2.0,
+        OUTRO_BEATS + OUTRO_FADE_BEATS + 10.0,
+    ),
+    (
+        OUTRO_BEATS + OUTRO_FADE_BEATS + 11.0,
+        OUTRO_BEATS + OUTRO_FADE_BEATS + 19.0,
+    ),
+];
+const DEMO_END_BEATS: f32 = OUTRO_BEATS + OUTRO_FADE_BEATS + 21.0;
 /// Space between the camera and the most deformed membrane. This is deliberately
 /// generous: the safety projection should be a last resort, not something that
 /// visibly reshapes the authored spline as the shot begins.
@@ -192,9 +220,6 @@ const SPIN_BEATS: f32 = SPIKE_BEATS + 20.0;
 const SPIN_BASE: f32 = 0.22;
 const SPIN_FROM_BASS: f32 = 2.5;
 const SPIN_FROM_BEAT: f32 = 1.1;
-/// How much smoke the arms shed once they are trailing. A wisp, not a scene.
-const OCTOPUS_SMOKE: f32 = 0.15;
-
 /// The second axis runs slower, so the two never resolve into one tumble.
 const TILT_RATIO: f32 = 0.37;
 
@@ -223,8 +248,6 @@ pub struct Stage {
     pub spike: f32,
     /// Transition mask threshold: 0 is fully the old scene, 1 the new one.
     pub dissolve: f32,
-    /// Extra dye shed during a transition, to give the wipe a front.
-    pub burst: f32,
     /// How far the blobs have gathered into a single body, 0 to 1.
     pub merge: f32,
     /// How far the body has bled out into the water, 0 to 1. It leads the
@@ -258,13 +281,22 @@ pub struct Stage {
     pub tunnel_tentacles: f32,
     /// Beats since the camera began its forward tunnel march.
     pub tunnel_travel: f32,
+    /// Tunnel closing into, then opening out of, a reflective cube.
+    pub cube_cross: f32,
+    /// How completely the gravitational cube sea has replaced the tunnel.
+    pub cube_field: f32,
+    /// Strength of the cubes' ballistic motion.
+    pub cube_gravity: f32,
+    /// Beats elapsed since arriving in the cube sea.
+    pub cube_travel: f32,
+    /// Cube field disappearing into the outro black.
+    pub outro_fade: f32,
+    /// Dim peach beam retained behind the outro cards.
+    pub outro_beam: f32,
     /// The room's palette shift, on its own slower ramp than the body's. A
     /// background caught changing draws attention to itself; the point is that
     /// it has receded, not that it receded just now.
     pub palette: f32,
-    /// How much smoke there is: full in the first scene, gone through the
-    /// change, then a little again once the arms are trailing.
-    pub smoke: f32,
     /// How far the body has wound up, 0 to 1. The angles themselves live in
     /// `Spin`, since a rate that follows the music has to be integrated.
     pub winding: f32,
@@ -317,6 +349,36 @@ impl Stage {
             }
         }
 
+        // Names appear one at a time as quiet inscriptions over the fractal.
+        for (index, (start, end)) in GREETINGS.iter().enumerate() {
+            if beats >= *start && beats < *end {
+                card = (CARDS.len() + CREDITS.len() + index) as i32;
+                let fade = 0.75;
+                card_alpha = smoothstep(*start, start + fade, beats)
+                    * (1.0 - smoothstep(end - fade, *end, beats));
+                let progress = (beats - start) / (end - start);
+                card_progress = progress;
+                scroll = SCROLL_RANGE * 0.55 * (0.5 - progress);
+                scale = CREDIT_SCALE * 1.18;
+                card_offset = [CREDIT_X, CREDIT_Y];
+            }
+        }
+
+        // Return to the opening's centered, bright card treatment at the end.
+        for (index, (start, end)) in OUTRO_CARDS.iter().enumerate() {
+            if beats >= *start && beats < *end {
+                card = (CARDS.len() + CREDITS.len() + GREETINGS.len() + index) as i32;
+                let fade = 1.0;
+                card_alpha = smoothstep(*start, start + fade, beats)
+                    * (1.0 - smoothstep(end - fade, *end, beats));
+                let progress = (beats - start) / (end - start);
+                card_progress = progress;
+                scroll = SCROLL_RANGE * (0.5 - progress);
+                scale = [1.9, 1.25][index] * (1.0 + progress * 0.06);
+                card_offset = [0.0, 0.0];
+            }
+        }
+
         // Cards breathe on the beat rather than sitting flat.
         card_alpha *= 0.82 + music.beat * 0.35;
 
@@ -328,31 +390,10 @@ impl Stage {
         // rather than appearing and then being wiped to.
         let dissolve = smoothstep(SPIKE_BEATS - 2.0, SPIKE_BEATS + SPIKE_RAMP * 0.7, beats);
 
-        // A burst of dye just before the wipe, so the mask has a front to
-        // sweep instead of only the thin wakes the beads leave.
-        let since = beats - (SPIKE_BEATS - 3.0);
-        let burst = if since > 0.0 {
-            (1.0 - since / 5.0).clamp(0.0, 1.0).powf(0.6)
-        } else {
-            0.0
-        };
-
         let merge = smoothstep(MERGE_BEATS, MERGE_BEATS + MERGE_RAMP, beats);
         let palette = smoothstep(MERGE_BEATS, MERGE_BEATS + PALETTE_RAMP, beats);
         let collapse = smoothstep(COLLAPSE_BEATS, COLLAPSE_BEATS + COLLAPSE_RAMP, beats);
         let bleed = smoothstep(COLLAPSE_BEATS - 6.0, COLLAPSE_BEATS + 2.0, beats);
-
-        // The gap between the two is deliberate: the smoke clears completely
-        // before the arms start shedding their own.
-        // The bleed puts the body into the water, then the water clears with
-        // the room — the fractal scene has no smoke in it.
-        // The arms stop shedding well before the room goes, so the frame is
-        // clear when the transition starts. Smoke still hanging around during
-        // a scene change reads as the old scene refusing to leave — and the
-        // bleed sheds none at all now, since ink over the collapse looked like
-        // calligraphy rather than a body coming apart.
-        let clearing = 1.0 - smoothstep(COLLAPSE_BEATS - 12.0, COLLAPSE_BEATS - 5.0, beats);
-        let smoke = (1.0 - spike).max(merge * OCTOPUS_SMOKE * clearing);
 
         // The room going white over the change, and coming back on the far
         // side. Full white exactly at SWAP, which is where scene.wgsl trades
@@ -395,6 +436,23 @@ impl Stage {
             beats,
         );
         let tunnel_travel = (beats - TUNNEL_BEATS - TUNNEL_TRANSITION_BEATS).max(0.0);
+        let cube_cross = smoothstep(CUBE_BEATS, CUBE_BEATS + CUBE_TRANSITION_BEATS, beats);
+        let cube_field = smoothstep(
+            CUBE_BEATS + CUBE_TRANSITION_BEATS * 0.45,
+            CUBE_BEATS + CUBE_TRANSITION_BEATS,
+            beats,
+        );
+        let cube_gravity = smoothstep(
+            CUBE_BEATS - CUBE_GRAVITY_LEAD_BEATS,
+            CUBE_BEATS - CUBE_GRAVITY_LEAD_BEATS + CUBE_GRAVITY_BEATS,
+            beats,
+        );
+        // Run the phase clock alongside the gravity ramp, not from arrival.
+        // The sea is therefore already moving when the cover opens onto it.
+        let cube_travel = (beats - (CUBE_BEATS - CUBE_GRAVITY_LEAD_BEATS)).max(0.0);
+        let outro_fade = smoothstep(OUTRO_BEATS, OUTRO_BEATS + OUTRO_FADE_BEATS, beats);
+        let outro_beam = smoothstep(OUTRO_BEATS + 1.0, OUTRO_BEATS + OUTRO_FADE_BEATS, beats)
+            * (1.0 - smoothstep(DEMO_END_BEATS - 2.0, DEMO_END_BEATS, beats));
 
         Self {
             card,
@@ -412,13 +470,17 @@ impl Stage {
             tunnel_field,
             tunnel_tentacles,
             tunnel_travel,
+            cube_cross,
+            cube_field,
+            cube_gravity,
+            cube_travel,
+            outro_fade,
+            outro_beam,
             bleed,
             dive: smoothstep(COLLAPSE_BEATS, COLLAPSE_BEATS + 160.0, beats),
-            smoke,
             winding: smoothstep(SPIN_BEATS, SPIN_BEATS + 12.0, beats),
             spike,
             dissolve,
-            burst,
             scene: smoothstep(SCENE_START, SCENE_START + SCENE_FADE, t),
             scroll,
             scale,
@@ -431,6 +493,11 @@ impl Stage {
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+/// True after the final card and its remaining beam have faded completely.
+pub fn is_finished(music: &Sync) -> bool {
+    music.beat_phase >= DEMO_END_BEATS
 }
 
 // --- camera --------------------------------------------------------------
@@ -903,6 +970,15 @@ impl Director {
             camera.fov_degrees += (tunnel.fov_degrees - camera.fov_degrees) * handoff;
             camera.focus_distance += (tunnel.focus_distance - camera.focus_distance) * handoff;
         }
+        if stage.cube_cross > 0.0 {
+            let cubes = cube_camera(music);
+            let handoff = smoothstep(0.46, 0.54, stage.cube_cross);
+            camera.eye = camera.eye.lerp(cubes.eye, handoff);
+            camera.target = camera.target.lerp(cubes.target, handoff);
+            camera.up = camera.up.lerp(cubes.up, handoff).normalize_or_zero();
+            camera.fov_degrees += (cubes.fov_degrees - camera.fov_degrees) * handoff;
+            camera.focus_distance += (cubes.focus_distance - camera.focus_distance) * handoff;
+        }
         camera
     }
 
@@ -1195,6 +1271,28 @@ mod tests {
         assert_eq!(arrived.tunnel_cross, 1.0);
         assert_eq!(arrived.tunnel_field, 1.0);
         assert!(arrived.tunnel_tentacles > 0.0);
+    }
+
+    #[test]
+    fn cube_sea_follows_a_full_tunnel_section() {
+        let stage_at = |beat_phase| {
+            Stage::at(&Sync {
+                beat_phase,
+                ..Default::default()
+            })
+        };
+        let before = stage_at(CUBE_BEATS - 0.01);
+        assert_eq!(before.cube_cross, 0.0);
+        assert_eq!(before.cube_field, 0.0);
+
+        let covered = stage_at(CUBE_BEATS + CUBE_TRANSITION_BEATS * 0.5);
+        assert!(covered.cube_cross > 0.45 && covered.cube_cross < 0.55);
+        assert!(covered.cube_field < 0.1);
+
+        let arrived = stage_at(CUBE_BEATS + CUBE_TRANSITION_BEATS + 0.01);
+        assert_eq!(arrived.cube_cross, 1.0);
+        assert_eq!(arrived.cube_field, 1.0);
+        assert!(arrived.cube_gravity > 0.0);
     }
 
     #[test]

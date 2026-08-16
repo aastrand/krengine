@@ -13,22 +13,27 @@ pub enum Frame {
 use crate::audio::Sync;
 use crate::gpu::Gpu;
 use crate::passes::bloom::{BloomPass, BloomTargets};
-use crate::passes::fluid::FluidPass;
 use crate::passes::text::TextPass;
 use crate::passes::{
     DEPTH_FORMAT, HDR_FORMAT, particles::ParticlePass, post::PostPass, scene::ScenePass,
 };
 use crate::timeline::{Camera, Director, Flow, Spin, Stage};
 
-/// Every card, in the order the timeline indexes them: the three intro
-/// titles, then the credits that run under the ferrofluid.
-const CARDS: [&str; 6] = [
+/// Every card: three intro titles, one attribution, six fractal greetings,
+/// then two outro cards.
+const CARDS: [&str; 12] = [
     "smeuch",
     "is back",
     "2026",
-    "code: kranken",
-    "ideas: spinax",
-    "dagspress: whodini",
+    "a demo by kranken",
+    "spinax",
+    "zantac",
+    "whodini",
+    "antimedel",
+    "lixus",
+    "gammawave",
+    "smeuch",
+    "2026",
 ];
 
 /// Supersampling factor, over the *logical* window. The scene renders at this
@@ -67,6 +72,8 @@ const FRACTAL_BEADS: u32 = 1152;
 /// Sparse droplets for the lens field. More makes circular halos around every
 /// membrane, which reads as a diagram of planets rather than suspended fluid.
 const LENS_PARTICLES: u32 = 420;
+/// Four restrained impact motes across each of eighty nearby cube cells.
+const CUBE_PARTICLES: u32 = 320;
 
 /// Mirrors `Uniforms` in shaders/common.wgsl. Keep the field order in sync.
 #[repr(C)]
@@ -96,6 +103,10 @@ struct Uniforms {
     lens: [f32; 4],
     /// (covered transition, tunnel field, tentacle growth, travel in beats).
     tunnel: [f32; 4],
+    /// (covered transition, cube field, gravity, beats in scene).
+    cubes: [f32; 4],
+    /// (cube fade to black, remaining cube-wave glow, unused, unused).
+    outro: [f32; 4],
     /// (collapse, unused, unused, unused).
     collapse: [f32; 4],
     /// (focus distance, aperture strength, unused, unused).
@@ -165,7 +176,6 @@ pub struct Renderer {
     uniform_bind_group: wgpu::BindGroup,
 
     scene: ScenePass,
-    fluid: FluidPass,
     particles: ParticlePass,
     bloom: BloomPass,
     text: TextPass,
@@ -174,8 +184,6 @@ pub struct Renderer {
     targets: Targets,
     bloom_targets: BloomTargets,
     hdr_bind_group: wgpu::BindGroup,
-    /// One per dye buffer; the fluid says which is current each frame.
-    mask_bind_groups: [wgpu::BindGroup; 2],
     /// Draws the spectrum as bars over the frame, for picking a band by eye.
     pub show_bands: bool,
     director: Director,
@@ -200,8 +208,7 @@ impl Renderer {
             label: Some("uniform layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                // Compute too: the fluid kernels read time and dt from here.
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -238,21 +245,14 @@ impl Renderer {
             gpu.config.height,
             gpu.scale_factor(),
         );
-        let fluid = FluidPass::new(device, &uniform_layout, &targets.depth);
         let bloom_targets =
             bloom.targets(device, &targets.hdr, gpu.config.width, gpu.config.height);
         let hdr_bind_group = post.make_scene_bind_group(device, &targets.hdr, &targets.depth);
-        let masks = fluid.mask_views();
-        let mask_bind_groups = [
-            post.make_bind_group(device, masks[0]),
-            post.make_bind_group(device, masks[1]),
-        ];
 
         Self {
             uniform_buf,
             uniform_bind_group,
             scene,
-            fluid,
             particles,
             bloom,
             text,
@@ -260,7 +260,6 @@ impl Renderer {
             targets,
             bloom_targets,
             hdr_bind_group,
-            mask_bind_groups,
             show_bands: false,
             director: Director::default(),
             spin: Spin::default(),
@@ -277,7 +276,6 @@ impl Renderer {
             gpu.config.height,
             gpu.scale_factor(),
         );
-        self.fluid.resize(&gpu.device, &self.targets.depth);
         self.bloom_targets = self.bloom.targets(
             &gpu.device,
             &self.targets.hdr,
@@ -363,7 +361,7 @@ impl Renderer {
                 stage.card_offset[0],
                 stage.card_offset[1],
             ],
-            scene: [stage.spike, stage.dissolve, stage.burst, stage.smoke],
+            scene: [stage.spike, stage.dissolve, 0.0, 0.0],
             lens: [
                 stage.lens_seal,
                 stage.lens_cross,
@@ -376,6 +374,13 @@ impl Renderer {
                 stage.tunnel_tentacles,
                 stage.tunnel_travel,
             ],
+            cubes: [
+                stage.cube_cross,
+                stage.cube_field,
+                stage.cube_gravity,
+                stage.cube_travel,
+            ],
+            outro: [stage.outro_fade, stage.outro_beam, 0.0, 0.0],
             collapse: [stage.collapse, stage.bleed, along, radius],
             dof: [focus_distance, dof_strength, 0.0, 0.0],
             track,
@@ -388,7 +393,9 @@ impl Renderer {
     pub fn render(&mut self, gpu: &Gpu, music: &Sync) -> Frame {
         let stage = Stage::at(music);
 
-        let beads = if stage.tunnel_field > 0.999 {
+        let beads = if stage.cube_field > 0.001 {
+            CUBE_PARTICLES
+        } else if stage.tunnel_field > 0.999 {
             0
         } else if stage.lens_field > 0.999 {
             LENS_PARTICLES
@@ -403,12 +410,13 @@ impl Renderer {
         // physical focus ring follows it: cuts initiate a pull instead of
         // making the focal plane teleport with the camera.
         let desired_focus = shot.focus_distance.clamp(0.35, 14.0);
+        let blob_focus_locked = stage.collapse <= 0.85;
         let fractal_focus_locked =
             stage.collapse > 0.85 && stage.lens_field < 0.01 && stage.tunnel_field < 0.01;
-        if !self.focus_initialized || fractal_focus_locked {
-            // Fractal shots are hard cuts. Arrive with their strings already
-            // focused; watching the focal plane travel after every cut fought
-            // the scene's calm, architectural presentation.
+        if !self.focus_initialized || blob_focus_locked || fractal_focus_locked {
+            // Blob and fractal shots are hard cuts. Arrive with the subject
+            // already focused: a delayed rack makes the hero object look like
+            // the camera briefly lost it, rather than like an authored pull.
             self.focus_distance = desired_focus;
             self.focus_initialized = true;
         } else {
@@ -425,14 +433,6 @@ impl Renderer {
             };
             let focus_alpha = 1.0 - (-music.dt.max(0.0) / focus_time).exp();
             self.focus_distance += (desired_focus - self.focus_distance) * focus_alpha;
-            if stage.collapse <= 0.85 && stage.lens_field <= 0.01 {
-                // On the blob and octopus, a lagging focus ring may sit in
-                // front of the subject but never behind its central surface.
-                // The latter reads as focusing on empty space through the
-                // translucent/reflective body—the distracting overshoot the
-                // camera should never perform.
-                self.focus_distance = self.focus_distance.min(desired_focus);
-            }
         }
         let dof_strength = if stage.tunnel_field > 0.01 {
             // Keep the tunnel predominantly crisp. The changing focal plane
@@ -510,15 +510,6 @@ impl Renderer {
                 label: Some("frame encoder"),
             });
 
-        // Once the smoke has cleared there is nothing to solve or draw. The
-        // dissolve mask still samples the dye, but by then its threshold has
-        // swept past everything, so a frozen field reads the same.
-        let fluid_visible = stage.smoke > 0.01;
-        if fluid_visible {
-            self.fluid
-                .simulate(&mut encoder, &self.uniform_bind_group, PARTICLE_COUNT);
-        }
-
         self.scene.draw(
             &mut encoder,
             &self.targets.hdr,
@@ -534,15 +525,7 @@ impl Renderer {
                 &self.targets.depth,
                 &self.uniform_bind_group,
                 beads,
-                // The same condition the fluid is drawn on: the beads only
-                // need to lay down depth where there are smoke sheets to
-                // composite against them.
-                fluid_visible,
             );
-        }
-        if fluid_visible {
-            self.fluid
-                .draw(&mut encoder, &self.targets.hdr, &self.uniform_bind_group);
         }
         // Before bloom, so the fireflies and letterforms feed it.
         self.text.draw(
@@ -560,7 +543,6 @@ impl Renderer {
             &self.uniform_bind_group,
             &self.hdr_bind_group,
             self.bloom_targets.result(),
-            &self.mask_bind_groups[self.fluid.mask_parity()],
         );
 
         gpu.queue.submit(Some(encoder.finish()));

@@ -133,6 +133,10 @@ impl ApplicationHandler for App {
                 if let Frame::Reconfigure = state.renderer.render(&state.gpu, &music) {
                     state.gpu.reconfigure();
                 }
+                if crate::timeline::is_finished(&music) {
+                    event_loop.exit();
+                    return;
+                }
                 if let Some(limit) = self.bench
                     && (now - state.start).as_secs_f32() > limit
                 {

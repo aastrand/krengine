@@ -5,6 +5,21 @@
 
 use super::*;
 
+/// A low aerial track over the cube field. The diagonal view exposes both the
+/// collective wave and each cube's individual ballistic arc.
+pub(super) fn cube_camera(music: &Sync) -> Camera {
+    let since = (music.beat_phase - CUBE_BEATS - CUBE_TRANSITION_BEATS).max(0.0);
+    let z = -since * 0.34;
+    let eye = Vec3::new((since * 0.045).sin() * 2.2, 5.4, z + 7.5);
+    Camera {
+        eye,
+        target: Vec3::new((since * 0.045 + 0.45).sin() * 1.6, 0.5, z - 5.0),
+        up: Vec3::Y,
+        fov_degrees: 58.0,
+        focus_distance: 9.0,
+    }
+}
+
 /// A steady forward march down the tunnel. Broad lateral drift keeps the wall
 /// relief moving in parallax; a restrained roll makes the bore feel endless
 /// without turning the camera into another orbit shot.

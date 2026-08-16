@@ -5,11 +5,12 @@ const COMMON: &str = include_str!("shaders/common.wgsl");
 /// The fullscreen scene remains one WGSL module and one render pipeline, but
 /// each effect owns a source fragment. WGSL has no native include mechanism,
 /// so Rust composes the fragments in dependency order before compilation.
-const SCENE_PARTS: [&str; 5] = [
+const SCENE_PARTS: [&str; 6] = [
     include_str!("shaders/scenes/blob.wgsl"),
     include_str!("shaders/scenes/fractal.wgsl"),
     include_str!("shaders/scenes/lenses.wgsl"),
     include_str!("shaders/scenes/tunnel.wgsl"),
+    include_str!("shaders/scenes/cubes.wgsl"),
     include_str!("shaders/scene.wgsl"),
 ];
 
@@ -29,11 +30,8 @@ pub fn module(device: &wgpu::Device, label: &str, source: &str) -> wgpu::ShaderM
 /// include their own sources at the point of use, so this is a second list —
 /// a shader missing from it is simply not covered by the test below.
 #[cfg(test)]
-const MODULES: [(&str, &str); 7] = [
+const MODULES: [(&str, &str); 4] = [
     ("particles", include_str!("shaders/particles.wgsl")),
-    ("fluid", include_str!("shaders/fluid.wgsl")),
-    ("fluid_view", include_str!("shaders/fluid_view.wgsl")),
-    ("splat", include_str!("shaders/splat.wgsl")),
     ("bloom", include_str!("shaders/bloom.wgsl")),
     ("text", include_str!("shaders/text.wgsl")),
     ("post", include_str!("shaders/post.wgsl")),

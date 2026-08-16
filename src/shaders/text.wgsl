@@ -119,8 +119,9 @@ fn fs_text(in: VsOut) -> @location(0) vec4<f32> {
         clamp(glint * 0.85, 0.0, 1.0),
     );
 
-    // The cards after the three titles are the credits.
-    let credits = step(2.5, u.intro.x);
+    // The attribution and six fractal greetings are quiet dark inscriptions.
+    // The final two cards return to the bright opening treatment against black.
+    let credits = step(2.5, u.intro.x) * (1.0 - step(9.5, u.intro.x));
     let ink = mix(bright, dark, credits);
 
     // Credits also thicken slightly as the sweep passes, so the shimmer is

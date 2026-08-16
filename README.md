@@ -1,8 +1,8 @@
 # krengine
 
 An audio-reactive demo built with Rust and wgpu. It combines raymarched liquid
-metal, a fractal landscape, living lenses, a morphing tunnel, particle strings,
-fluid simulation, bloom, and depth of field.
+metal, a fractal landscape, living lenses, a morphing tunnel, a gravitational
+cube sea, particle strings, bloom, and depth of field.
 
 ## Run
 
@@ -49,7 +49,7 @@ src/
   shader.rs           WGSL source composition and shader validation
 
   passes/              Rust-side GPU pipeline and resource management
-  shaders/             WGSL for particles, fluid, bloom, text, and post
+  shaders/             WGSL for scenes, particles, bloom, text, and post
   shaders/scenes/      one WGSL fragment per raymarched 3D effect
 ```
 
@@ -64,11 +64,10 @@ Each frame is encoded in this order:
 
 1. Sample audio and evaluate the timeline.
 2. Update the camera, focus, motion, and shared uniform buffer.
-3. Advance the fluid simulation when it is visible.
-4. Raymarch the active 3D scene into HDR color and depth.
-5. Draw particles, fluid sheets, and text.
-6. Extract bloom.
-7. Apply depth of field, transitions, tonemapping, and output to the window.
+3. Raymarch the active 3D scene into HDR color and depth.
+4. Draw particles and text.
+5. Extract bloom.
+6. Apply depth of field, transitions, tonemapping, and output to the window.
 
 The ownership boundaries are:
 
