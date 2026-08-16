@@ -121,6 +121,8 @@ struct SharedState {
     /// Output latency in seconds, as reported by the backend: the gap between
     /// a callback running and those samples actually being audible.
     latency: AtomicU32,
+    /// Master output gain, published by the visual timeline as raw f32 bits.
+    gain: AtomicU32,
 }
 
 /// The audio thread's window into the recent past.
@@ -376,6 +378,7 @@ impl Music {
         let channels = config.channels() as usize;
 
         let state = Arc::new(SharedState::default());
+        state.gain.store(1.0f32.to_bits(), Ordering::Relaxed);
         // Seed the tempo so the beat clock is right before the first row lands.
         state
             .bpm
@@ -454,10 +457,11 @@ impl Music {
             state.latency.store(latency.to_bits(), Ordering::Relaxed);
 
             let mut player = player.lock().unwrap();
+            let gain = f32::from_bits(state.gain.load(Ordering::Relaxed)).clamp(0.0, 1.0);
             let mut frames = 0u64;
             for frame in out.chunks_mut(channels) {
-                let l = player.next().unwrap_or(0) as f32 / 32768.0;
-                let r = player.next().unwrap_or(0) as f32 / 32768.0;
+                let l = player.next().unwrap_or(0) as f32 / 32768.0 * gain;
+                let r = player.next().unwrap_or(0) as f32 / 32768.0 * gain;
                 for (i, sample) in frame.iter_mut().enumerate() {
                     *sample = if i % 2 == 0 { l } else { r };
                 }
@@ -477,6 +481,13 @@ impl Music {
         };
 
         Ok(stream)
+    }
+
+    /// Set the demo's master output level without blocking the audio callback.
+    pub fn set_gain(&self, gain: f32) {
+        self.state
+            .gain
+            .store(gain.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
 
     /// The demo's master clock.

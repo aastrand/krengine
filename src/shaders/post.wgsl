@@ -262,5 +262,8 @@ fn fs_main(in: FullscreenOut) -> @location(0) vec4<f32> {
     let n2 = fract(sin(dot(in.pos.xy - u.time, vec2<f32>(39.3467, 11.135))) * 24634.6345);
     color = color + (n1 + n2 - 1.0) * (1.6 / 255.0);
 
-    return vec4<f32>(band_overlay(in.pos.xy, color), 1.0);
+    // Applied after grain and the debug overlay so the demo truly ends at
+    // digital zero, then holds that frame before the event loop exits.
+    let finished = band_overlay(in.pos.xy, color) * (1.0 - u.outro.z);
+    return vec4<f32>(finished, 1.0);
 }

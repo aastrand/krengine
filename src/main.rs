@@ -105,6 +105,9 @@ impl ApplicationHandler for App {
                         ..Default::default()
                     },
                 };
+                if let Some(player) = self.music.as_ref() {
+                    player.set_gain(crate::timeline::audio_gain(&music));
+                }
 
                 // How evenly does the demo clock advance compared to real time?
                 // 1.0 means perfectly smooth; spread here is visible judder.

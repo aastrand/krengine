@@ -55,13 +55,20 @@ fn cube_impact_particle(i: u32) -> vec4<f32> {
     let phase = length(anchor) * 0.075
         + dot(anchor, normalize(vec2<f32>(1.0, 0.63))) * 0.035;
     let cycle = fract(u.cubes.w * 0.125 - phase);
-    let life = clamp((cycle - 0.79) / 0.20, 0.0, 1.0);
-    let alive = smoothstep(0.79, 0.84, cycle) * (1.0 - smoothstep(0.94, 0.99, cycle));
+    let life = clamp((cycle - 0.74) / 0.25, 0.0, 1.0);
+    let alive = smoothstep(0.72, 0.78, cycle) * (1.0 - smoothstep(0.94, 0.995, cycle));
     let seed = fract(f32(i) * 0.6180339);
     let angle = seed * PI * 2.0 + f32(mote) * 1.7;
-    let spread = vec2<f32>(cos(angle), sin(angle)) * life * (0.12 + seed * 0.22);
-    let lift = 4.0 * life * (1.0 - life) * (0.22 + seed * 0.32);
-    let position = vec3<f32>(anchor.x * spacing + spread.x, 0.05 + lift, anchor.y * spacing + spread.y);
+    // Launch from just outside the top edges. Emitting at the cell centre put
+    // every mote inside its cube, where the scene depth correctly hid it.
+    let radial = 0.52 + life * (0.24 + seed * 0.24);
+    let spread = vec2<f32>(cos(angle), sin(angle)) * radial;
+    let lift = 4.0 * life * (1.0 - life) * (0.52 + seed * 0.58);
+    let position = vec3<f32>(
+        anchor.x * spacing + spread.x,
+        0.58 + lift,
+        anchor.y * spacing + spread.y,
+    );
     return vec4<f32>(position, alive * u.cubes.y);
 }
 
@@ -130,7 +137,7 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     // to punch.
     let pulse = 1.0 + u.audio.w * mix(0.45, 0.06, fractal_scene);
     let fractal_size = mix(4.0 * (0.55 + arrival * 0.45), 1.65, u.lens.w);
-    let cube_size = mix(1.0, 0.38, u.cubes.y);
+    let cube_size = mix(1.0, 0.92, u.cubes.y);
     let size = (0.018 + 0.022 * fract(fi * 0.31)) * pulse
         * mix(1.0, fractal_size, fractal_scene) * cube_size;
     let world = center + (u.camera_right.xyz * corner.x + u.camera_up.xyz * corner.y) * size;
@@ -147,7 +154,9 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     let pearl = vec3<f32>(1.00, 0.42, 0.13) * (0.45 + fract(fi * 0.193) * 0.40);
     let satellite = mix(ink, pearl, step(0.76, fract(fi * 0.731)));
     let previous_tint = mix(ink, satellite, u.lens.w);
-    out.tint = mix(previous_tint, VEIN_COLOR * (0.55 + fract(fi * 0.417) * 0.45), u.cubes.y);
+    let impact_tint = mix(VEIN_COLOR, VEIN_CORE, 0.58)
+        * (1.15 + fract(fi * 0.417) * 0.75);
+    out.tint = mix(previous_tint, impact_tint, u.cubes.y);
     return out;
 }
 

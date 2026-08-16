@@ -293,6 +293,8 @@ pub struct Stage {
     pub outro_fade: f32,
     /// Dim peach beam retained behind the outro cards.
     pub outro_beam: f32,
+    /// Final fade including grain and every post effect; held before exit.
+    pub final_black: f32,
     /// The room's palette shift, on its own slower ramp than the body's. A
     /// background caught changing draws attention to itself; the point is that
     /// it has receded, not that it receded just now.
@@ -453,6 +455,7 @@ impl Stage {
         let outro_fade = smoothstep(OUTRO_BEATS, OUTRO_BEATS + OUTRO_FADE_BEATS, beats);
         let outro_beam = smoothstep(OUTRO_BEATS + 1.0, OUTRO_BEATS + OUTRO_FADE_BEATS, beats)
             * (1.0 - smoothstep(DEMO_END_BEATS - 2.0, DEMO_END_BEATS, beats));
+        let final_black = smoothstep(DEMO_END_BEATS - 2.0, DEMO_END_BEATS - 1.0, beats);
 
         Self {
             card,
@@ -476,6 +479,7 @@ impl Stage {
             cube_travel,
             outro_fade,
             outro_beam,
+            final_black,
             bleed,
             dive: smoothstep(COLLAPSE_BEATS, COLLAPSE_BEATS + 160.0, beats),
             winding: smoothstep(SPIN_BEATS, SPIN_BEATS + 12.0, beats),
@@ -498,6 +502,12 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 /// True after the final card and its remaining beam have faded completely.
 pub fn is_finished(music: &Sync) -> bool {
     music.beat_phase >= DEMO_END_BEATS
+}
+
+/// Master output gain. The tune recedes across the whole visual outro, reaches
+/// silence before the last black frame, and stays silent through the hold.
+pub fn audio_gain(music: &Sync) -> f32 {
+    1.0 - smoothstep(OUTRO_BEATS, DEMO_END_BEATS - 4.0, music.beat_phase)
 }
 
 // --- camera --------------------------------------------------------------
@@ -1293,6 +1303,21 @@ mod tests {
         assert_eq!(arrived.cube_cross, 1.0);
         assert_eq!(arrived.cube_field, 1.0);
         assert!(arrived.cube_gravity > 0.0);
+    }
+
+    #[test]
+    fn outro_reaches_silence_and_holds_black_before_exit() {
+        let sync = |beat_phase| Sync {
+            beat_phase,
+            ..Default::default()
+        };
+        assert_eq!(audio_gain(&sync(OUTRO_BEATS - 0.01)), 1.0);
+        assert_eq!(audio_gain(&sync(DEMO_END_BEATS - 4.0)), 0.0);
+
+        let black = Stage::at(&sync(DEMO_END_BEATS - 0.5));
+        assert_eq!(black.final_black, 1.0);
+        assert!(!is_finished(&sync(DEMO_END_BEATS - 0.5)));
+        assert!(is_finished(&sync(DEMO_END_BEATS)));
     }
 
     #[test]

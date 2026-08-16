@@ -105,7 +105,7 @@ struct Uniforms {
     tunnel: [f32; 4],
     /// (covered transition, cube field, gravity, beats in scene).
     cubes: [f32; 4],
-    /// (cube fade to black, remaining cube-wave glow, unused, unused).
+    /// (cube fade, remaining cube-wave glow, final black, unused).
     outro: [f32; 4],
     /// (collapse, unused, unused, unused).
     collapse: [f32; 4],
@@ -380,7 +380,7 @@ impl Renderer {
                 stage.cube_gravity,
                 stage.cube_travel,
             ],
-            outro: [stage.outro_fade, stage.outro_beam, 0.0, 0.0],
+            outro: [stage.outro_fade, stage.outro_beam, stage.final_black, 0.0],
             collapse: [stage.collapse, stage.bleed, along, radius],
             dof: [focus_distance, dof_strength, 0.0, 0.0],
             track,

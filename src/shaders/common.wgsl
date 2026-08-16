@@ -34,7 +34,7 @@ struct Uniforms {
     tunnel: vec4<f32>,
     /// Cube sea: (covered transition, field, gravity, beats in scene).
     cubes: vec4<f32>,
-    /// Outro: (cube fade to black, remaining cube-wave glow, unused, unused).
+    /// Outro: (cube fade, remaining cube-wave glow, final black, unused).
     outro: vec4<f32>,
     /// Room collapse: (amount, bleed, camera's position along the path, the
     /// radius it is gliding at).
