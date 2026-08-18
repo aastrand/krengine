@@ -8,6 +8,16 @@ const LENS_SHADOW: vec3<f32> = vec3<f32>(0.07, 0.09, 0.14);
 const LENS_INK: vec3<f32> = vec3<f32>(0.012, 0.015, 0.025);
 const LENS_HOT: vec3<f32> = vec3<f32>(1.0, 0.94, 0.87);
 
+// Arrangement envelope authored from the isolated synth stem. The lead drains
+// away over beats 176-184, holds sparse through 192, then charges back into
+// the tunnel cut at beat 200. Live FFT remains layered on top of this shape.
+fn lens_stem_phrase() -> vec2<f32> {
+    let hush_in = smoothstep(176.0, 184.0, u.music.z);
+    let rebuild = smoothstep(192.0, 200.0, u.music.z);
+    let presence = mix(1.0 - hush_in * 0.72, 1.0, rebuild);
+    return vec2<f32>(presence, rebuild);
+}
+
 fn lens_environment(ro: vec3<f32>, rd: vec3<f32>) -> vec3<f32> {
     // A revised version of the first room: the camera again sits inside a
     // large sphere, now darker silver with sparse orange seams. Its structure
@@ -92,9 +102,10 @@ fn render_lens_scene(ro: vec3<f32>, rd: vec3<f32>) -> RayScene {
     let p = ro + rd * hit.x;
     let n = lens_normal(p);
     let fi = f32(chosen);
+    let phrase = lens_stem_phrase();
     let tangent = safe_direction(cross(n, vec3<f32>(0.12, 1.0, 0.08)), vec3<f32>(1.0, 0.0, 0.0));
     let wave_phase = dot(p - center, tangent) * 10.0 - u.music.z * PI * 2.0 + fi * 1.7;
-    let wave = sin(wave_phase) * (0.010 + u.audio.y * 0.038);
+    let wave = sin(wave_phase) * (0.010 + u.audio.y * 0.038) * mix(0.42, 1.0, phrase.x);
 
     let facing = max(dot(-rd, n), 0.0);
     let fresnel = pow(1.0 - facing, 3.0);
@@ -103,7 +114,10 @@ fn render_lens_scene(ro: vec3<f32>, rd: vec3<f32>) -> RayScene {
     // background panels are visibly magnified and displaced inside the shape,
     // while the small eta difference leaves a restrained spectral fringe.
     let optical_axis = safe_direction(center - ro, rd);
-    let radial_bend = 0.075 + (1.0 - facing) * 0.20 + u.audio.y * 0.035;
+    let radial_bend = 0.075
+        + (1.0 - facing) * 0.20
+        + u.audio.y * 0.035
+        + phrase.y * 0.025;
     let physical_r = safe_direction(refract(rd, n, 0.76) + tangent * wave * 2.4, rd);
     let physical_g = safe_direction(refract(rd, n, 0.74) + tangent * wave * 2.4, rd);
     let physical_b = safe_direction(refract(rd, n, 0.72) + tangent * wave * 2.4, rd);
@@ -117,7 +131,9 @@ fn render_lens_scene(ro: vec3<f32>, rd: vec3<f32>) -> RayScene {
     );
     let thickness = radius * facing * 1.6;
 
-    let caustic = pow(max(sin(wave_phase * 0.5), 0.0), 8.0) * (0.15 + u.audio.y * 0.85);
+    let caustic = pow(max(sin(wave_phase * 0.5), 0.0), 8.0)
+        * (0.15 + u.audio.y * 0.85)
+        * mix(0.35, 1.0, phrase.x);
     var membrane = mix(refracted, LENS_PEARL, 0.012 + thickness * 0.006);
     membrane = mix(membrane, LENS_IVORY, fresnel * 0.10);
     // Transparency here means seeing a displaced background, not retaining the
@@ -126,11 +142,15 @@ fn render_lens_scene(ro: vec3<f32>, rd: vec3<f32>) -> RayScene {
     var color = mix(out.color, membrane, optical_mix);
     let interference = pow(0.5 + 0.5 * sin(wave_phase * 1.35 + thickness * 2.8), 18.0);
     color = color + LENS_PEACH
-        * (fresnel * 1.45 + caustic * 0.42 + interference * (0.06 + u.audio.z * 0.18));
+        * (fresnel * mix(0.72, 1.45, phrase.x)
+            + caustic * 0.42
+            + interference * (0.06 + u.audio.z * 0.18)
+            + phrase.y * fresnel * 0.34);
 
     let light = normalize(vec3<f32>(0.45, 0.72, 0.52));
     let spec = pow(max(dot(reflect(rd, n), light), 0.0), 180.0) * 4.0;
-    color = color + LENS_HOT * spec * (0.45 + band(14u) * 0.55);
+    color = color + LENS_HOT * spec
+        * (0.30 + phrase.x * 0.15 + band(14u) * 0.55 + phrase.y * 0.24);
 
     out.color = color;
     out.depth = clip_depth(p);

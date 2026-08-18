@@ -51,9 +51,13 @@ fn tunnel_tentacles(p: vec3<f32>) -> vec2<f32> {
     var root_heat = 0.0;
     let spacing = 5.2;
     let first_gate = floor((-u.camera_pos.z) / spacing) + 1.0;
-    for (var i = 0u; i < 5u; i = i + 1u) {
-        let fi = f32(i);
-        let gate = first_gate + fi;
+    // Gate influence windows do not overlap, so a point can only belong to
+    // one of the five visible tentacles. Resolve that gate directly instead
+    // of rebuilding all five curves at every ray-march and normal sample.
+    let nearest_gate = floor((-p.z - 0.9) / spacing + 0.5);
+    let gate = clamp(nearest_gate, first_gate, first_gate + 4.0);
+    let fi = gate - first_gate;
+    if abs(nearest_gate - gate) < 0.5 {
         let base_z = -gate * spacing;
         let angle = gate * 2.399963;
         let opposite = angle + PI + sin(gate * 1.7) * 0.24;
@@ -83,10 +87,13 @@ fn tunnel_tentacles(p: vec3<f32>) -> vec2<f32> {
             // Previously each sample contributed a sphere; close shots exposed
             // those individual lobes as a string of pearls.
             var strand = 1.0e9;
-            for (var sample = 0u; sample < 21u; sample = sample + 1u) {
-                let t0 = f32(sample) / 21.0;
+            // Sixteen swept capsules remain visually continuous at the
+            // strand's radius, while avoiding five extra curve evaluations
+            // per field query compared with the original tessellation.
+            for (var sample = 0u; sample < 16u; sample = sample + 1u) {
+                let t0 = f32(sample) / 16.0;
                 if t0 < grow {
-                    let t1 = min(f32(sample + 1u) / 21.0, grow);
+                    let t1 = min(f32(sample + 1u) / 16.0, grow);
                     let p0 = tentacle_curve(a, b, side, t0, gate);
                     let p1 = tentacle_curve(a, b, side, t1, gate);
                     let axis = p1 - p0;
@@ -163,13 +170,13 @@ fn render_tunnel_scene(ro: vec3<f32>, rd: vec3<f32>) -> RayScene {
     out.depth = 1.0;
     var t = 0.04;
     var hit = vec3<f32>(-1.0);
-    for (var step = 0; step < 120; step = step + 1) {
+    for (var step = 0; step < 104; step = step + 1) {
         let sample = tunnel_field(ro + rd * t);
-        if sample.x < 0.0012 * t {
+        if sample.x < 0.00135 * t {
             hit = vec3<f32>(t, sample.yz);
             break;
         }
-        t = t + max(sample.x * 0.52, 0.004);
+        t = t + max(sample.x * 0.58, 0.0045);
         if t > 24.0 { break; }
     }
     if hit.x < 0.0 { return out; }

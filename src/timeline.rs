@@ -24,15 +24,43 @@ use cameras::{
 const CARDS: [(f32, f32); 3] = [(0.4, 2.9), (3.2, 5.5), (5.8, 8.1)];
 /// A single attribution under the ferrofluid, indexed after the intro cards.
 const CREDITS: [(f32, f32); 1] = [(MERGE_BEATS + 6.0, MERGE_BEATS + 18.0)];
-/// Greetings occupy the settled fractal section, after its white swap and bead
-/// reveal but before the first aperture begins sealing into a lens.
-const GREETINGS: [(f32, f32); 6] = [
-    (COLLAPSE_BEATS + 14.0, COLLAPSE_BEATS + 18.0),
-    (COLLAPSE_BEATS + 18.4, COLLAPSE_BEATS + 22.4),
-    (COLLAPSE_BEATS + 22.8, COLLAPSE_BEATS + 26.8),
-    (COLLAPSE_BEATS + 27.2, COLLAPSE_BEATS + 31.2),
-    (COLLAPSE_BEATS + 31.6, COLLAPSE_BEATS + 35.6),
-    (COLLAPSE_BEATS + 36.0, COLLAPSE_BEATS + 40.0),
+/// The isolated slam after the DnB build's quiet pocket, measured directly in
+/// the final Ogg. This—not the earlier downbeat—is the fractal drop.
+const FRACTAL_DROP_BEATS: f32 = 105.6;
+/// Greetings occupy the now-short, settled fractal section between that drop
+/// and the fixed synth-lead signal. They are compact enough that every name
+/// clears before the signal cube arrives.
+const GREETINGS: [(f32, f32); 7] = [
+    (FRACTAL_DROP_BEATS + 1.5, FRACTAL_DROP_BEATS + 4.3),
+    (FRACTAL_DROP_BEATS + 4.6, FRACTAL_DROP_BEATS + 7.4),
+    (FRACTAL_DROP_BEATS + 7.7, FRACTAL_DROP_BEATS + 10.5),
+    (FRACTAL_DROP_BEATS + 10.8, FRACTAL_DROP_BEATS + 13.6),
+    (FRACTAL_DROP_BEATS + 13.9, FRACTAL_DROP_BEATS + 16.7),
+    (FRACTAL_DROP_BEATS + 17.0, FRACTAL_DROP_BEATS + 19.8),
+    (FRACTAL_DROP_BEATS + 20.1, FRACTAL_DROP_BEATS + 22.9),
+];
+const SIGNAL_WORDS: usize = 14;
+const SIGNAL_TEXT_START: f32 = 43.776;
+const SIGNAL_TEXT_CADENCE: f32 = 0.514;
+const SIGNAL_TEXT_HOLD: f32 = 0.42;
+/// Screen-space continuation of the cube's successive X/Y/Z quarter-turns.
+/// Every second triplet reverses the apparent sweep as the cube's accumulated
+/// orientation presents the opposite faces to the camera.
+const SIGNAL_TEXT_THROW: [[f32; 2]; SIGNAL_WORDS] = [
+    [0.0, -1.0],
+    [1.0, 0.0],
+    [-0.72, 0.72],
+    [0.0, 1.0],
+    [-1.0, 0.0],
+    [0.72, -0.72],
+    [0.0, -1.0],
+    [1.0, 0.0],
+    [-0.72, 0.72],
+    [0.0, 1.0],
+    [-1.0, 0.0],
+    [0.72, -0.72],
+    [0.0, -1.0],
+    [1.0, 0.0],
 ];
 /// Credits sit small, low, and in black — they are a footnote to the scene,
 /// not a title over it.
@@ -120,8 +148,9 @@ const FRACTAL_HOLD_BEATS: f32 = 4.0;
 /// How much closer the shot drifts over the whole scene, as a fraction.
 const FRACTAL_DIVE: f32 = 0.22;
 
-/// When the room contracts and takes the scene with it.
-const COLLAPSE_BEATS: f32 = MERGE_BEATS + 34.0;
+/// Start contracting late enough that the white cover occupies the quiet
+/// pocket before the measured drop, rather than swallowing the DnB build.
+const COLLAPSE_BEATS: f32 = MERGE_BEATS + 38.0;
 const COLLAPSE_RAMP: f32 = 12.0;
 
 /// How far into the collapse the scene changes over, as fractions of it.
@@ -135,8 +164,9 @@ const COLLAPSE_RAMP: f32 = 12.0;
 /// not only at the instant the curve happens to touch 1.
 const WASH_IN: f32 = 0.52;
 const WASH_HOLD: f32 = 0.86;
-const WASH_BACK: f32 = 0.94;
-const WASH_OUT: f32 = 1.0;
+/// A half-beat snap out of white: quick enough to belong to the slam, softened
+/// enough not to alias as a single-frame cut.
+const FRACTAL_REVEAL_BEATS: f32 = 0.5;
 /// Let the new room settle after the white-out before its bead field arrives.
 /// Kept in beats so the pause remains musical at any tracker tempo.
 const BEAD_REVEAL_DELAY: f32 = 2.0;
@@ -145,7 +175,8 @@ const BEAD_REVEAL_BEATS: f32 = 1.5;
 /// The fractal gets a full section before one of its holes becomes the first
 /// living lens. The handoff itself is eight beats: seal, refract, then cross.
 /// Minimal signal-cube interlude after the last greeting.
-const SIGNAL_BEATS: f32 = COLLAPSE_BEATS + 40.0;
+/// Fixed to the isolated synth lead: its repeated signal enters at 43.776s.
+const SIGNAL_BEATS: f32 = 130.0;
 const SIGNAL_DURATION_BEATS: f32 = 22.0;
 const SIGNAL_TRANSITION_BEATS: f32 = 2.0;
 const LENS_BEATS: f32 = SIGNAL_BEATS + SIGNAL_DURATION_BEATS;
@@ -156,11 +187,9 @@ const LENS_TRANSITION_BEATS: f32 = 8.0;
 const LENS_FLIGHT_BEATS: f32 = 96.0;
 /// Hold one membrane in focus for two bars before pulling to another depth.
 const LENS_FOCUS_BEATS: f32 = 8.0;
-/// The lens field holds for eight bars, then one membrane liquefies into the
-/// tunnel entrance. Eight beats leave time for a covered camera handoff. The
-/// shorter hold gives its spare phrase to the opening blobs while keeping the
-/// tunnel and finale locked to their existing points in the track.
-const TUNNEL_BEATS: f32 = LENS_BEATS + LENS_TRANSITION_BEATS + 12.0;
+/// Twelve bars from lens entrance to tunnel. The synth stem empties across
+/// beats 180-196, then returns at beat 200 exactly where the tunnel takes over.
+const TUNNEL_BEATS: f32 = LENS_BEATS + LENS_TRANSITION_BEATS + 40.0;
 const TUNNEL_TRANSITION_BEATS: f32 = 8.0;
 const TUNNEL_TENTACLE_BEATS: f32 = 16.0;
 /// The tunnel gets four bars to develop before it opens onto the final cube
@@ -376,10 +405,35 @@ impl Stage {
             }
         }
 
+        // One word on every measured synth-lead beep. These are intentionally
+        // timed in seconds: the motif is ~0.514s, not a division of 180 BPM.
+        for (index, direction) in SIGNAL_TEXT_THROW.iter().enumerate() {
+            let start = SIGNAL_TEXT_START + index as f32 * SIGNAL_TEXT_CADENCE;
+            let end = start + SIGNAL_TEXT_HOLD;
+            if t >= start && t < end {
+                card = (CARDS.len() + CREDITS.len() + GREETINGS.len() + index) as i32;
+                let progress = (t - start) / SIGNAL_TEXT_HOLD;
+                card_alpha =
+                    smoothstep(0.0, 0.08, progress) * (1.0 - smoothstep(0.58, 1.0, progress));
+                card_progress = progress;
+                scroll = 0.0;
+                // Sit precisely over the hero during its fast quarter-turn,
+                // then inherit that turn's screen-space momentum and leave
+                // the frame. Ease-in keeps the word/cube lock crisp at onset.
+                let departure = smoothstep(0.20, 0.92, progress).powi(2);
+                card_offset = [
+                    direction[0] * departure * 1.32,
+                    direction[1] * departure * 1.18,
+                ];
+                scale = (2.25 + index.saturating_sub(11) as f32 * 0.28) * (1.0 + departure * 0.10);
+            }
+        }
+
         // Return to the opening's centered, bright card treatment at the end.
         for (index, (start, end)) in OUTRO_CARDS.iter().enumerate() {
             if beats >= *start && beats < *end {
-                card = (CARDS.len() + CREDITS.len() + GREETINGS.len() + index) as i32;
+                card =
+                    (CARDS.len() + CREDITS.len() + GREETINGS.len() + SIGNAL_WORDS + index) as i32;
                 let fade = 1.0;
                 card_alpha = smoothstep(*start, start + fade, beats)
                     * (1.0 - smoothstep(end - fade, *end, beats));
@@ -411,8 +465,13 @@ impl Stage {
         // side. Full white exactly at SWAP, which is where scene.wgsl trades
         // the old geometry for the fractal — so the swap itself lands in the
         // one frame where nothing can be made out.
-        let wash = smoothstep(WASH_IN, WASH_HOLD, collapse)
-            .min(1.0 - smoothstep(WASH_BACK, WASH_OUT, collapse));
+        let wash = smoothstep(WASH_IN, WASH_HOLD, collapse).min(
+            1.0 - smoothstep(
+                FRACTAL_DROP_BEATS,
+                FRACTAL_DROP_BEATS + FRACTAL_REVEAL_BEATS,
+                beats,
+            ),
+        );
 
         // Do not let the beads leak into the outgoing scene. The new room
         // first gets a clean beat to establish itself, then the shader reveals
@@ -1299,6 +1358,25 @@ mod tests {
     }
 
     #[test]
+    fn fractal_reveal_lands_on_the_drum_drop() {
+        let stage_at = |beat_phase| {
+            Stage::at(&Sync {
+                beat_phase,
+                ..Default::default()
+            })
+        };
+
+        // The covered geometry swap happens earlier, but no fractal pixels
+        // escape the white plateau before the measured isolated slam.
+        assert_eq!(stage_at(FRACTAL_DROP_BEATS - 0.01).wash, 1.0);
+        assert!(stage_at(FRACTAL_DROP_BEATS + 0.30).wash < 0.5);
+        assert_eq!(
+            stage_at(FRACTAL_DROP_BEATS + FRACTAL_REVEAL_BEATS).wash,
+            0.0
+        );
+    }
+
+    #[test]
     fn tunnel_transition_follows_a_full_lens_section() {
         let stage_at = |beat_phase| {
             Stage::at(&Sync {
@@ -1355,6 +1433,14 @@ mod tests {
         assert_eq!(black.final_black, 1.0);
         assert!(!is_finished(&sync(DEMO_END_BEATS - 0.5)));
         assert!(is_finished(&sync(DEMO_END_BEATS)));
+    }
+
+    #[test]
+    fn extended_edit_lands_on_stem_boundaries() {
+        assert_eq!(SIGNAL_BEATS, 130.0);
+        assert_eq!(LENS_BEATS, 152.0);
+        assert_eq!(TUNNEL_BEATS, 200.0);
+        assert_eq!(DEMO_END_BEATS, 304.0);
     }
 
     #[test]

@@ -368,13 +368,13 @@ fn particle_pos(i: u32, t: f32) -> vec3<f32> {
 //
 // A mandelbox: fold the space into a box, fold it through a sphere, scale, and
 // repeat. Both folds are distance-preserving enough to keep a usable estimate,
-// so the whole structure costs a dozen iterations per sample.
+// so the whole structure costs seven iterations per sample.
 //
 // Its scale parameter is what makes it worth using here — sweeping it morphs
 // the shape continuously from open and cathedral-like to dense and spiky, and
 // the structure is self-similar, so diving into it keeps revealing more.
 
-const FRACTAL_ITERATIONS: i32 = 8;
+const FRACTAL_ITERATIONS: i32 = 7;
 /// Fold strength. Around 1.2 gives the packed-sphere cathedral; lower opens it
 /// out, higher tightens it into gravel.
 const FRACTAL_FOLD: f32 = 1.22;

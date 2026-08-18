@@ -19,9 +19,8 @@ use crate::passes::{
 };
 use crate::timeline::{Camera, Director, Flow, Spin, Stage};
 
-/// Every card: three intro titles, one attribution, six fractal greetings,
-/// then two outro cards.
-const CARDS: [&str; 12] = [
+/// Intro, attribution, greetings, signal-cube words, then the outro.
+const CARDS: [&str; 27] = [
     "smeuch",
     "is back",
     "2026",
@@ -30,8 +29,23 @@ const CARDS: [&str; 12] = [
     "zantac",
     "whodini",
     "antimedel",
+    "candybag",
     "lixus",
     "gammawave",
+    "25",
+    "years",
+    "later",
+    "same",
+    "signal",
+    "new",
+    "frame",
+    "old",
+    "habits",
+    "like",
+    "we",
+    "never",
+    "really",
+    "left",
     "smeuch",
     "2026",
 ];
@@ -66,9 +80,9 @@ fn render_scale() -> f32 {
 
 pub const PARTICLE_COUNT: u32 = 512;
 /// Beads in the fractal scene, split between the strings. This keeps each of
-/// the twelve corridors visibly populated, filling the architecture with a
+/// the corridors visibly populated, filling the architecture with a
 /// field of threads rather than a small bundle.
-const FRACTAL_BEADS: u32 = 1152;
+const FRACTAL_BEADS: u32 = 864;
 /// Sparse droplets for the lens field. More makes circular halos around every
 /// membrane, which reads as a diagram of planets rather than suspended fluid.
 const LENS_PARTICLES: u32 = 420;

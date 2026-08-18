@@ -119,10 +119,13 @@ fn fs_text(in: VsOut) -> @location(0) vec4<f32> {
         clamp(glint * 0.85, 0.0, 1.0),
     );
 
-    // The attribution and six fractal greetings are quiet dark inscriptions.
-    // The final two cards return to the bright opening treatment against black.
-    let credits = step(2.5, u.intro.x) * (1.0 - step(9.5, u.intro.x));
-    let ink = mix(bright, dark, credits);
+    // Attribution and seven greetings are quiet dark inscriptions. Signal-cube
+    // words are warm, sharp flashes; outro returns to the opening treatment.
+    let credits = step(2.5, u.intro.x) * (1.0 - step(10.5, u.intro.x));
+    let signal = step(10.5, u.intro.x) * (1.0 - step(24.5, u.intro.x));
+    let signal_ink = vec3<f32>(0.42, 0.09, 0.025)
+        + vec3<f32>(1.0, 0.58, 0.24) * min(glint, 1.25);
+    let ink = mix(mix(bright, dark, credits), signal_ink, signal);
 
     // Credits also thicken slightly as the sweep passes, so the shimmer is
     // legible on letters this small.

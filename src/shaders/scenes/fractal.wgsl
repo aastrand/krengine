@@ -61,15 +61,15 @@ fn march_fractal(ro: vec3<f32>, rd: vec3<f32>) -> vec3<f32> {
     var t = 0.02;
     var steps = 0.0;
 
-    for (var i = 0; i < 110; i = i + 1) {
+    for (var i = 0; i < 96; i = i + 1) {
         let p = ro + rd * t;
         let hit = fractal(p);
 
         // Threshold grows with distance, so far detail is not marched forever.
-        if hit.distance < 0.0006 * t {
+        if hit.distance < 0.00072 * t {
             return vec3<f32>(t, hit.trap, steps);
         }
-        t = t + hit.distance * 0.85;
+        t = t + hit.distance * 0.90;
         steps = steps + 1.0;
 
         if t > 14.0 {
