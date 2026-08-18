@@ -123,7 +123,7 @@ struct Uniforms {
     outro: [f32; 4],
     /// (collapse, unused, unused, unused).
     collapse: [f32; 4],
-    /// (focus distance, aperture strength, unused, unused).
+    /// (focus distance, aperture strength, current lens, previous lens).
     dof: [f32; 4],
     /// The traced corridor the bead string runs along, as world positions.
     track: [[f32; 4]; crate::fractal::STRINGS * crate::fractal::TRACK_POINTS],
@@ -319,6 +319,9 @@ impl Renderer {
         radius: f32,
         focus_distance: f32,
         dof_strength: f32,
+        focused_lens: usize,
+        previous_lens: usize,
+        focus_progress: f32,
     ) -> Uniforms {
         let time = music.time;
         let eye = shot.eye;
@@ -359,7 +362,7 @@ impl Renderer {
                 } else {
                     0.0
                 },
-                0.0,
+                focus_progress,
                 0.0,
             ],
             // Clamped: a long stall must not blow the simulation up.
@@ -401,7 +404,12 @@ impl Renderer {
             ],
             outro: [stage.outro_fade, stage.outro_beam, stage.final_black, 0.0],
             collapse: [stage.collapse, stage.bleed, along, radius],
-            dof: [focus_distance, dof_strength, 0.0, 0.0],
+            dof: [
+                focus_distance,
+                dof_strength,
+                focused_lens as f32,
+                previous_lens as f32,
+            ],
             track,
             track_frame,
             motion: [stage.merge, spin.yaw, spin.tilt, stage.palette],
@@ -457,7 +465,9 @@ impl Renderer {
                 // tunnel's resting plane rather than snapping optically.
                 0.30
             } else if stage.lens_field > 0.01 {
-                1.05
+                // Land decisively on the newly selected membrane before the
+                // drum accent has decayed, then track its moving surface.
+                0.22
             } else {
                 0.55
             };
@@ -481,7 +491,7 @@ impl Renderer {
             // should gently isolate a tentacle, never turn the bore to fog.
             0.26 * stage.tunnel_field
         } else if stage.lens_field > 0.01 {
-            1.16
+            1.30
         } else if stage.collapse > 0.85 {
             // The fractal is dense enough that selective focus reads as a
             // generally blurry image. Keep its architecture and strings
@@ -513,6 +523,8 @@ impl Renderer {
         }
         let spin = self.spin.update(music, &stage);
         let flow = self.flow.swell(music);
+        let (previous_lens, focused_lens, focus_progress) =
+            self.director.lens_focus_state(music.beat_phase);
         let uniforms = Self::uniforms(
             gpu,
             music,
@@ -528,6 +540,9 @@ impl Renderer {
             self.director.radius,
             self.focus_distance,
             dof_strength,
+            focused_lens,
+            previous_lens,
+            focus_progress,
         );
         gpu.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));

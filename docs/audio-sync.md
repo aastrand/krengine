@@ -113,7 +113,50 @@ note onset, measure several successive onset-to-onset intervals, and use their
 median as the cadence. Do not convert this motif to beats unless the replacement
 is demonstrably quantized.
 
-## Cube-sea transition and launches
+## Lens focus pulls
+
+Lens-to-lens focus changes use selected strong low-drum accents rather than an
+even eight-beat timer. The camera chooses a comfortably framed near/far subject
+on each cue, follows that membrane's animated front surface, and holds it until
+the next cue.
+
+| Cut seconds | Timeline beats |
+| ---: | ---: |
+| 54.44 | 163.32 |
+| 56.66 | 169.98 |
+| 59.42 | 178.26 |
+| 62.14 | 186.42 |
+| 64.90 | 194.70 |
+
+These values form `LENS_FOCUS_CUES`. They were selected from the low-passed
+drum candidates below: approximately one musically strong change every two to
+three seconds, not a rack on every kick.
+
+```sh
+stem="$HOME/Downloads/Neuro Architecture Stems/1 Drums.wav"
+ffmpeg -hide_banner -loglevel info -ss 228 -t 16 -i "$stem" \
+  -af 'lowpass=f=220,asetnsamples=n=960:p=0,astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level' \
+  -f null - 2>&1 \
+  | sed -n 's/.*pts_time:\([^ ]*\).*/TIME \1/p; s/.*RMS_level=\(.*\)/RMS \1/p' \
+  | paste - - \
+  | awk '
+      BEGIN { last = -1 }
+      {
+        time = $2
+        level = $4
+        if (previous > before_previous && previous >= level && previous > -22 && previous_time - last > 0.30) {
+          cut_time = 52 + previous_time
+          printf "cut %.3f  beat %.2f  rms %.1f\n", cut_time, cut_time * 3, previous
+          last = previous_time
+        }
+        before_previous = previous
+        previous = level
+        previous_time = time
+      }
+    '
+```
+
+## Cube-sea transition and crests
 
 The final transition uses three drum-stem events:
 

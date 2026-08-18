@@ -11,13 +11,14 @@ use crate::audio::Sync;
 
 mod cameras;
 use cameras::{
-    choose_lens_focus, cube_camera, lens_camera, lens_focus_distance, lens_is_visible,
-    stabilize_lens_view, tunnel_camera,
+    choose_lens_focus, cube_camera, lens_camera, lens_focus_distance, stabilize_lens_view,
+    tunnel_camera,
 };
 
 #[cfg(test)]
 use cameras::{
-    animated_lens_center, animated_lens_radius, lens_flight_point, lens_visibility_score,
+    animated_lens_center, animated_lens_radius, lens_flight_point, lens_is_visible,
+    lens_visibility_score,
 };
 
 /// Cards shown before the scene appears, as (start, end) in seconds.
@@ -185,8 +186,10 @@ const LENS_TRANSITION_BEATS: f32 = 8.0;
 /// One long flight through the lens field before its closed spline repeats.
 /// At 125 BPM this is about 46 seconds without a cut or visible reset.
 const LENS_FLIGHT_BEATS: f32 = 96.0;
-/// Hold one membrane in focus for two bars before pulling to another depth.
-const LENS_FOCUS_BEATS: f32 = 8.0;
+/// Strong low-drum accents measured from the lens section's isolated stem.
+/// The selected membrane changes only on these cues; camera motion and lens
+/// deformation cannot trigger an unscheduled autofocus jump between them.
+const LENS_FOCUS_CUES: [f32; 5] = [163.32, 169.98, 178.26, 186.42, 194.70];
 /// Twelve bars from lens entrance to tunnel. The synth stem empties across
 /// beats 180-196, then returns at beat 200 exactly where the tunnel takes over.
 const TUNNEL_BEATS: f32 = LENS_BEATS + LENS_TRANSITION_BEATS + 40.0;
@@ -849,6 +852,8 @@ pub struct Director {
     /// visibility cannot trigger unscheduled autofocus changes.
     lens_focus_phrase: usize,
     lens_focus_index: usize,
+    lens_focus_previous: usize,
+    lens_focus_changed_at: f32,
     /// Where the camera is along the path, and at what radius, so the beads
     /// can be strung along the same corridor rather than their own.
     pub along: f32,
@@ -883,6 +888,8 @@ impl Default for Director {
             lens_view_started: false,
             lens_focus_phrase: usize::MAX,
             lens_focus_index: 0,
+            lens_focus_previous: 0,
+            lens_focus_changed_at: f32::NEG_INFINITY,
             along: 0.0,
             radius: FRACTAL_INSIDE,
             placed_for: usize::MAX,
@@ -1108,16 +1115,20 @@ impl Director {
                     stabilize_lens_view(lens.eye, self.lens_forward, desired, music);
             }
             lens.target = lens.eye + self.lens_forward * 4.0;
-            let since = (music.beat_phase - LENS_BEATS - LENS_TRANSITION_BEATS).max(0.0);
-            let focus_phrase = (since / LENS_FOCUS_BEATS).floor() as usize;
-            if focus_phrase != self.lens_focus_phrase
-                || !lens_is_visible(lens.eye, self.lens_forward, self.lens_focus_index, music)
-            {
-                self.lens_focus_index =
-                    choose_lens_focus(lens.eye, self.lens_forward, music, focus_phrase);
+            let focus_phrase = LENS_FOCUS_CUES.partition_point(|cue| music.beat_phase >= *cue);
+            if focus_phrase != self.lens_focus_phrase {
+                let next = choose_lens_focus(lens.eye, self.lens_forward, music, focus_phrase);
+                if self.lens_focus_phrase == usize::MAX {
+                    self.lens_focus_previous = next;
+                    self.lens_focus_changed_at = music.beat_phase - 1.0;
+                } else {
+                    self.lens_focus_previous = self.lens_focus_index;
+                    self.lens_focus_changed_at = music.beat_phase;
+                }
+                self.lens_focus_index = next;
                 self.lens_focus_phrase = focus_phrase;
             }
-            lens.focus_distance = lens_focus_distance(lens.eye, self.lens_focus_index);
+            lens.focus_distance = lens_focus_distance(lens.eye, self.lens_focus_index, music);
             // The membrane is opaque around the midpoint, so make the camera
             // handoff there. Blending it throughout the visible wipe made the
             // outgoing fractal slide and warp before it was covered.
@@ -1149,6 +1160,18 @@ impl Director {
             camera.focus_distance += (cubes.focus_distance - camera.focus_distance) * handoff;
         }
         camera
+    }
+
+    /// Previous and current membrane plus the short optical handoff between
+    /// them. Both subjects overlap as sharp around the midpoint, so the scene
+    /// never passes through a frame where every lens is out of focus.
+    pub fn lens_focus_state(&self, beat_phase: f32) -> (usize, usize, f32) {
+        let progress = smoothstep(
+            self.lens_focus_changed_at,
+            self.lens_focus_changed_at + 0.66,
+            beat_phase,
+        );
+        (self.lens_focus_previous, self.lens_focus_index, progress)
     }
 
     /// Where the whole bundle is, at a fraction along its length: the mean of
@@ -1652,6 +1675,39 @@ mod tests {
                 "step {step}: focused lens {} left the frame",
                 director.lens_focus_index,
             );
+        }
+    }
+
+    #[test]
+    fn lens_focus_switches_on_the_measured_drum_cues() {
+        let mut director = Director::default();
+        let opening = Sync {
+            time: 160.0 / 3.0,
+            beat_phase: 160.0,
+            dt: 1.0 / 60.0,
+            ..Default::default()
+        };
+        director.update(&opening, &Stage::at(&opening));
+        assert_eq!(director.lens_focus_phrase, 0);
+
+        for (index, cue) in LENS_FOCUS_CUES.iter().enumerate() {
+            let before = Sync {
+                time: (cue - 0.01) / 3.0,
+                beat_phase: cue - 0.01,
+                dt: 1.0 / 60.0,
+                ..Default::default()
+            };
+            director.update(&before, &Stage::at(&before));
+            assert_eq!(director.lens_focus_phrase, index);
+
+            let on_hit = Sync {
+                time: (cue + 0.01) / 3.0,
+                beat_phase: cue + 0.01,
+                dt: 1.0 / 60.0,
+                ..Default::default()
+            };
+            director.update(&on_hit, &Stage::at(&on_hit));
+            assert_eq!(director.lens_focus_phrase, index + 1);
         }
     }
 

@@ -16,7 +16,8 @@ struct Uniforms {
     music: vec4<f32>,
     /// FFT spectrum, 16 log-spaced bands packed four to a vector.
     bands: array<vec4<f32>, 4>,
-    /// Debug switches: (band overlay, unused, unused, unused).
+    /// Debug and optical state: (band overlay, unused, lens-focus handoff,
+    /// unused).
     debug: vec4<f32>,
     /// Per-frame values: (delta time, white wash, softened beat, bead arrival).
     frame: vec4<f32>,
@@ -40,8 +41,8 @@ struct Uniforms {
     /// Room collapse: (amount, bleed, camera's position along the path, the
     /// radius it is gliding at).
     collapse: vec4<f32>,
-    /// Cinematic depth of field: (focus distance, aperture strength, unused,
-    /// unused). Distance is measured from the camera in world units.
+    /// Cinematic depth of field: (focus distance, aperture strength, current
+    /// lens, previous lens). Distance is measured from the camera in world units.
     dof: vec4<f32>,
     /// The traced corridors the bead strings run along, laid end to end:
     /// STRINGS * TRACK_POINTS entries. Both counts must match fractal.rs — see

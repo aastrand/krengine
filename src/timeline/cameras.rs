@@ -151,6 +151,7 @@ pub(super) fn choose_lens_focus(eye: Vec3, forward: Vec3, music: &Sync, phrase: 
     visible[slot].0
 }
 
+#[cfg(test)]
 pub(super) fn lens_is_visible(eye: Vec3, forward: Vec3, lens: usize, music: &Sync) -> bool {
     let center = animated_lens_center(lens, music);
     let delta = center - eye;
@@ -162,11 +163,14 @@ pub(super) fn lens_is_visible(eye: Vec3, forward: Vec3, lens: usize, music: &Syn
     angle <= (LENS_FOV_DEGREES * 0.5).to_radians() + angular_radius
 }
 
-/// Stable nominal front-surface distance for the chosen membrane. Audio still
-/// morphs its rendering, but cannot make the focus ring breathe between the
-/// scheduled lens-to-lens pulls.
-pub(super) fn lens_focus_distance(eye: Vec3, lens: usize) -> f32 {
-    (eye.distance(LENS_CENTERS[lens]) - LENS_RADII[lens]).max(0.35)
+/// Current front-surface distance for the chosen membrane. Following the
+/// selected lens's slow deformation keeps that subject genuinely sharp for
+/// the whole hold instead of focusing the empty nominal plane behind it.
+pub(super) fn lens_focus_distance(eye: Vec3, lens: usize, music: &Sync) -> f32 {
+    let center = animated_lens_center(lens, music);
+    let direction = (eye - center).normalize_or_zero();
+    let radius = animated_lens_radius(direction, lens, music);
+    (eye.distance(center) - radius).max(0.35)
 }
 
 /// Catmull-Rom's parameter is not distance: using it directly makes the camera

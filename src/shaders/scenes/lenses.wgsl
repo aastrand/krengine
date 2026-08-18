@@ -153,6 +153,18 @@ fn render_lens_scene(ro: vec3<f32>, rd: vec3<f32>) -> RayScene {
         * (0.30 + phrase.x * 0.15 + band(14u) * 0.55 + phrase.y * 0.24);
 
     out.color = color;
-    out.depth = clip_depth(p);
+    // Treat focus as belonging to a membrane, not to one infinitesimally thin
+    // slice through its curved volume. During a rack the old and new subjects
+    // overlap as optically locked, so at least one whole lens remains crisp.
+    // Other membranes retain their physical surface depth and receive normal
+    // depth-of-field separation in post.
+    let focus_progress = clamp(u.debug.z, 0.0, 1.0);
+    let current_match = 1.0 - step(0.25, abs(hit.y - u.dof.z));
+    let previous_match = 1.0 - step(0.25, abs(hit.y - u.dof.w));
+    let current_lock = current_match * smoothstep(0.0, 0.42, focus_progress);
+    let previous_lock = previous_match * (1.0 - smoothstep(0.58, 1.0, focus_progress));
+    let subject_lock = max(current_lock, previous_lock);
+    let focal_point = ro + rd * u.dof.x;
+    out.depth = mix(clip_depth(p), clip_depth(focal_point), subject_lock);
     return out;
 }
