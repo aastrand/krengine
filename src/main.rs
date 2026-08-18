@@ -14,7 +14,7 @@ use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{Window, WindowId};
+use winit::window::{Fullscreen, Window, WindowId};
 
 use audio::{Music, Sync};
 use gpu::Gpu;
@@ -81,6 +81,14 @@ impl ApplicationHandler for App {
                     PhysicalKey::Code(KeyCode::Escape) => event_loop.exit(),
                     PhysicalKey::Code(KeyCode::KeyB) => {
                         state.renderer.show_bands = !state.renderer.show_bands;
+                    }
+                    PhysicalKey::Code(KeyCode::KeyF) if !event.repeat => {
+                        let fullscreen = if state.window.fullscreen().is_some() {
+                            None
+                        } else {
+                            Some(Fullscreen::Borderless(state.window.current_monitor()))
+                        };
+                        state.window.set_fullscreen(fullscreen);
                     }
                     _ => {}
                 }

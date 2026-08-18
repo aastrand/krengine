@@ -21,6 +21,7 @@ The demo always uses the bundled Ogg soundtrack.
 Controls:
 
 - `B` toggles the FFT-band overlay.
+- `F` toggles borderless fullscreen.
 - `Esc` exits.
 
 Environment:
