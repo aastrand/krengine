@@ -192,18 +192,43 @@ const LENS_FOCUS_BEATS: f32 = 8.0;
 const TUNNEL_BEATS: f32 = LENS_BEATS + LENS_TRANSITION_BEATS + 40.0;
 const TUNNEL_TRANSITION_BEATS: f32 = 8.0;
 const TUNNEL_TENTACLE_BEATS: f32 = 16.0;
-/// The tunnel gets four bars to develop before it opens onto the final cube
-/// sea. That is long enough for its corkscrew and tentacles to register, but
-/// short enough that it remains connective tissue rather than a second finale.
-const CUBE_BEATS: f32 = TUNNEL_BEATS + TUNNEL_TRANSITION_BEATS + 32.0;
-/// A fast cover: the approaching cube is an accent, not another full scene.
-const CUBE_TRANSITION_BEATS: f32 = 3.0;
+/// Three measured drum accents drive the final handoff: the cover launches on
+/// the first, fills the frame on the second, and uncovers the sea on the third.
+const CUBE_TRANSITION_START_BEATS: f32 = 239.94;
+const CUBE_TRANSITION_COVER_BEATS: f32 = 241.44;
+const CUBE_TRANSITION_END_BEATS: f32 = 244.02;
 /// Motion is already established behind the transition when the sea appears.
 const CUBE_GRAVITY_LEAD_BEATS: f32 = 6.0;
 const CUBE_GRAVITY_BEATS: f32 = 8.0;
 /// Four bars of the complete cube field before it fades into the end cards.
-const OUTRO_BEATS: f32 = CUBE_BEATS + CUBE_TRANSITION_BEATS + 32.0;
+const OUTRO_BEATS: f32 = 275.0;
 const OUTRO_FADE_BEATS: f32 = 8.0;
+/// Kick and low-tom attacks measured from the isolated drum stem, in seconds
+/// into the final cut. Strength keeps secondary hits from launching the field
+/// as high as the main kicks; the long 84.1-87.3 gap remains deliberately calm.
+const CUBE_DRUM_HITS: [(f32, f32); 21] = [
+    (79.98, 1.00),
+    (80.48, 1.00),
+    (80.80, 0.55),
+    (81.34, 1.00),
+    (81.86, 0.95),
+    (82.12, 1.00),
+    (82.72, 0.95),
+    (83.24, 1.00),
+    (83.56, 0.55),
+    (84.10, 1.00),
+    (87.32, 0.78),
+    (87.62, 0.90),
+    (87.94, 0.85),
+    (88.46, 0.88),
+    (88.96, 0.86),
+    (89.50, 0.88),
+    (90.02, 0.90),
+    (90.28, 0.80),
+    (90.78, 0.86),
+    (91.14, 0.75),
+    (91.62, 0.62),
+];
 const OUTRO_CARDS: [(f32, f32); 2] = [
     (
         OUTRO_BEATS + OUTRO_FADE_BEATS + 2.0,
@@ -328,6 +353,10 @@ pub struct Stage {
     pub cube_gravity: f32,
     /// Beats elapsed since arriving in the cube sea.
     pub cube_travel: f32,
+    /// Strength of and seconds since the latest measured drum hit in the cube
+    /// section. The shader turns this pair into a travelling crest and flash.
+    pub cube_drum_strength: f32,
+    pub cube_drum_phase: f32,
     /// Cube field disappearing into the outro black.
     pub outro_fade: f32,
     /// Dim peach beam retained behind the outro cards.
@@ -509,20 +538,34 @@ impl Stage {
             beats,
         );
         let tunnel_travel = (beats - TUNNEL_BEATS - TUNNEL_TRANSITION_BEATS).max(0.0);
-        let cube_cross = smoothstep(CUBE_BEATS, CUBE_BEATS + CUBE_TRANSITION_BEATS, beats);
+        let cube_cross = if beats < CUBE_TRANSITION_COVER_BEATS {
+            smoothstep(
+                CUBE_TRANSITION_START_BEATS,
+                CUBE_TRANSITION_COVER_BEATS,
+                beats,
+            ) * 0.5
+        } else {
+            0.5 + smoothstep(
+                CUBE_TRANSITION_COVER_BEATS,
+                CUBE_TRANSITION_END_BEATS,
+                beats,
+            ) * 0.5
+        };
         let cube_field = smoothstep(
-            CUBE_BEATS + CUBE_TRANSITION_BEATS * 0.45,
-            CUBE_BEATS + CUBE_TRANSITION_BEATS,
+            CUBE_TRANSITION_COVER_BEATS,
+            CUBE_TRANSITION_END_BEATS,
             beats,
         );
         let cube_gravity = smoothstep(
-            CUBE_BEATS - CUBE_GRAVITY_LEAD_BEATS,
-            CUBE_BEATS - CUBE_GRAVITY_LEAD_BEATS + CUBE_GRAVITY_BEATS,
+            CUBE_TRANSITION_START_BEATS - CUBE_GRAVITY_LEAD_BEATS,
+            CUBE_TRANSITION_START_BEATS - CUBE_GRAVITY_LEAD_BEATS + CUBE_GRAVITY_BEATS,
             beats,
         );
         // Run the phase clock alongside the gravity ramp, not from arrival.
         // The sea is therefore already moving when the cover opens onto it.
-        let cube_travel = (beats - (CUBE_BEATS - CUBE_GRAVITY_LEAD_BEATS)).max(0.0);
+        let cube_travel =
+            (beats - (CUBE_TRANSITION_START_BEATS - CUBE_GRAVITY_LEAD_BEATS)).max(0.0);
+        let (cube_drum_strength, cube_drum_phase) = cube_drum_sync(t);
         let outro_fade = smoothstep(OUTRO_BEATS, OUTRO_BEATS + OUTRO_FADE_BEATS, beats);
         let outro_beam = smoothstep(OUTRO_BEATS + 1.0, OUTRO_BEATS + OUTRO_FADE_BEATS, beats)
             * (1.0 - smoothstep(DEMO_END_BEATS - 2.0, DEMO_END_BEATS, beats));
@@ -550,6 +593,8 @@ impl Stage {
             cube_field,
             cube_gravity,
             cube_travel,
+            cube_drum_strength,
+            cube_drum_phase,
             outro_fade,
             outro_beam,
             final_black,
@@ -570,6 +615,24 @@ impl Stage {
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+fn cube_drum_sync(time: f32) -> (f32, f32) {
+    let mut strength = 0.0;
+    let mut phase = 1.0;
+    for (hit, hit_strength) in CUBE_DRUM_HITS {
+        if time < hit {
+            break;
+        }
+        strength = hit_strength;
+        phase = time - hit;
+    }
+    // A drum crest is finished before the next normal kick interval. In the
+    // long stem break this deliberately returns to the unaccented sea wave.
+    if phase > 0.62 {
+        strength = 0.0;
+    }
+    (strength, phase)
 }
 
 /// True after the final card and its remaining beam have faded completely.
@@ -1406,18 +1469,41 @@ mod tests {
                 ..Default::default()
             })
         };
-        let before = stage_at(CUBE_BEATS - 0.01);
+        let before = stage_at(CUBE_TRANSITION_START_BEATS - 0.01);
         assert_eq!(before.cube_cross, 0.0);
         assert_eq!(before.cube_field, 0.0);
 
-        let covered = stage_at(CUBE_BEATS + CUBE_TRANSITION_BEATS * 0.5);
-        assert!(covered.cube_cross > 0.45 && covered.cube_cross < 0.55);
+        let covered = stage_at(CUBE_TRANSITION_COVER_BEATS);
+        assert_eq!(covered.cube_cross, 0.5);
         assert!(covered.cube_field < 0.1);
 
-        let arrived = stage_at(CUBE_BEATS + CUBE_TRANSITION_BEATS + 0.01);
+        let arrived = stage_at(CUBE_TRANSITION_END_BEATS + 0.01);
         assert_eq!(arrived.cube_cross, 1.0);
         assert_eq!(arrived.cube_field, 1.0);
         assert!(arrived.cube_gravity > 0.0);
+    }
+
+    #[test]
+    fn cube_crests_follow_the_measured_drum_hits_and_gap() {
+        let hit = Stage::at(&Sync {
+            time: 84.11,
+            ..Default::default()
+        });
+        assert_eq!(hit.cube_drum_strength, 1.0);
+        assert!(hit.cube_drum_phase < 0.02);
+
+        let gap = Stage::at(&Sync {
+            time: 86.0,
+            ..Default::default()
+        });
+        assert_eq!(gap.cube_drum_strength, 0.0);
+
+        let return_hit = Stage::at(&Sync {
+            time: 87.33,
+            ..Default::default()
+        });
+        assert_eq!(return_hit.cube_drum_strength, 0.78);
+        assert!(return_hit.cube_drum_phase < 0.02);
     }
 
     #[test]

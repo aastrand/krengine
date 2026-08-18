@@ -33,10 +33,9 @@ fn fs_main(in: FullscreenOut) -> SceneOut {
     // Only once the room has actually gone. Swapping at half way meant the
     // collapse was over before it could be seen.
     //
-    // This threshold sits inside the white wash's plateau — see WASH_HOLD and
-    // WASH_BACK in timeline.rs, which bracket it — so the hard change from one
-    // geometry to the other happens on a frame that is solid white. Move it
-    // outside that window and the swap becomes a visible cut again.
+    // This threshold sits inside the white wash's plateau; the timeline holds
+    // that cover until the measured fractal drop, so the hard geometry change
+    // happens on a frame where nothing underneath can be seen.
     if u.collapse.x > 0.9 {
         if u.cubes.y > 0.999 {
             let cubes = render_cube_scene(ro, rd);
@@ -53,15 +52,30 @@ fn fs_main(in: FullscreenOut) -> SceneOut {
             // covering the frame while the scene and camera exchange behind it.
             let aspect = u.resolution.x / max(u.resolution.y, 1.0);
             let q = vec2<f32>(in.uv.x * aspect, in.uv.y);
-            let square = max(abs(q.x), abs(q.y));
+            let drum_flash = u.music.x * exp(-u.music.y * 12.0);
+            // Each measured transition hit gives the cover a small rotational
+            // kick and a hot beveled edge. The middle hit still owns the fully
+            // covered scene/camera swap.
+            let cover_angle = (u.cubes.x - 0.5) * 0.34 + drum_flash * 0.10;
+            let cover_c = cos(cover_angle);
+            let cover_s = sin(cover_angle);
+            let turned = vec2<f32>(
+                cover_c * q.x - cover_s * q.y,
+                cover_s * q.x + cover_c * q.y,
+            );
+            let square = max(abs(turned.x), abs(turned.y));
             let arriving_size = mix(0.025, 1.9, smoothstep(0.0, 0.5, u.cubes.x));
             let departing_size = mix(1.9, 0.0, smoothstep(0.5, 1.0, u.cubes.x));
-            let half_size = select(arriving_size, departing_size, u.cubes.x >= 0.5);
+            let half_size = select(arriving_size, departing_size, u.cubes.x >= 0.5)
+                + drum_flash * 0.035;
             let mask = 1.0 - smoothstep(half_size - 0.035, half_size + 0.035, square);
+            let hot_edge = 1.0 - smoothstep(0.015, 0.060, abs(square - half_size));
             let metal = vec3<f32>(0.06, 0.07, 0.09)
-                + LENS_PEACH * (0.10 + cover * 0.55 + u.audio.w * 0.16);
+                + LENS_PEACH * (0.10 + cover * 0.48 + drum_flash * 0.42);
             let switched = select(tunnel.color, cubes.color, u.cubes.x >= 0.5);
-            out.color = vec4<f32>(mix(switched, metal, mask) * fade, 1.0);
+            let transition = mix(switched, metal, mask)
+                + LENS_PEACH * hot_edge * (0.055 + drum_flash * 0.30);
+            out.color = vec4<f32>(transition * fade, 1.0);
             out.depth = select(tunnel.depth, cubes.depth, u.cubes.x >= 0.5);
             return out;
         }

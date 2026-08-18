@@ -8,7 +8,7 @@ use super::*;
 /// A low aerial track over the cube field. The diagonal view exposes both the
 /// collective wave and each cube's individual ballistic arc.
 pub(super) fn cube_camera(music: &Sync) -> Camera {
-    let since = (music.beat_phase - CUBE_BEATS - CUBE_TRANSITION_BEATS).max(0.0);
+    let since = (music.beat_phase - CUBE_TRANSITION_END_BEATS).max(0.0);
     let z = -since * 0.34;
     let eye = Vec3::new((since * 0.045).sin() * 2.2, 5.4, z + 7.5);
     Camera {

@@ -105,6 +105,11 @@ Useful tuning locations:
 - `shaders/scenes/`: effect geometry, materials, and audio response.
 - `shaders/post.wgsl` and `shaders/bloom.wgsl`: final image treatment.
 
+The stem-analysis process and exact timebase conversions behind the authored
+sync markers are recorded in [`docs/audio-sync.md`](docs/audio-sync.md). Use it
+when replacing or recutting the soundtrack rather than retiming by eye from
+scratch.
+
 ## Assets
 
 `assets/DejaVuSans-Bold.ttf` ships with its license. No music is included; the

@@ -16,11 +16,39 @@ fn cube_motion(cell: vec2<f32>) -> vec4<f32> {
     let flight = clamp((cycle - 0.06) / 0.78, 0.0, 1.0);
     // A parabola is the visual signature of gravity: fast launch, suspended
     // apex, accelerating fall. Bass increases height, never phase.
-    let height = 4.0 * flight * (1.0 - flight)
+    let wave_height = 4.0 * flight * (1.0 - flight)
         * airborne * (1.15 + u.audio.x * 1.35) * u.cubes.z;
-    let impact = (1.0 - smoothstep(0.86, 0.96, cycle)) * smoothstep(0.79, 0.90, cycle)
+    let wave_impact = (1.0 - smoothstep(0.86, 0.96, cycle)) * smoothstep(0.79, 0.90, cycle)
         * u.cubes.z;
-    return vec4<f32>(height, flight, airborne, impact);
+
+    // Drum hits do not replace the sea's continuous phase. Each one sends a
+    // broad sinusoidal crest outward through it, so the measured sync reads as
+    // extra energy in the same surface rather than a separate field of pops.
+    let drum_age = u.music.y;
+    let drum_active = step(0.001, u.music.x)
+        * smoothstep(0.0, 0.045, drum_age)
+        * (1.0 - smoothstep(0.32, 0.54, drum_age));
+    let drum_phase = length(cell) * 0.58
+        + dot(cell, normalize(vec2<f32>(-0.42, 1.0))) * 0.09
+        - drum_age * 10.5;
+    let drum_crest = pow(0.5 + 0.5 * sin(drum_phase), 2.0);
+    let drum_flight = clamp(drum_age / 0.54, 0.0, 1.0);
+    let drum_height = drum_crest
+        * drum_active
+        * u.music.x
+        * (0.82 + u.audio.x * 0.38)
+        * u.cubes.z;
+    let drum_impact = drum_crest
+        * smoothstep(0.36, 0.44, drum_age)
+        * (1.0 - smoothstep(0.46, 0.54, drum_age))
+        * u.music.x;
+    let drum_owns_motion = step(wave_height, drum_height);
+    return vec4<f32>(
+        wave_height + drum_height,
+        mix(flight, drum_flight, drum_owns_motion),
+        max(airborne, drum_crest * drum_active),
+        max(wave_impact, drum_impact),
+    );
 }
 
 fn cube_at(p: vec3<f32>, cell: vec2<f32>) -> vec3<f32> {

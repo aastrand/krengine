@@ -343,7 +343,12 @@ impl Renderer {
             time,
             particle_count: beads as f32,
             audio: [music.low, music.mid, music.high, music.beat],
-            music: [0.0, 0.0, music.beat_phase, music.bar_phase],
+            music: [
+                stage.cube_drum_strength,
+                stage.cube_drum_phase,
+                music.beat_phase,
+                music.bar_phase,
+            ],
             bands: bytemuck::cast(music.bands),
             debug: [
                 if show_bands { 1.0 } else { 0.0 },
